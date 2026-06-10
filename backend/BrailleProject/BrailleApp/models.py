@@ -25,7 +25,7 @@ class Image(models.Model):
         null=True,
         blank=True
     )
-    image_path = models.CharField(max_length=500)
+    image_path = models.ImageField(upload_to='images/', max_length=500, null=True, blank=True)  # Changed to ImageField
     image_name = models.CharField(max_length=255, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -34,4 +34,4 @@ class Image(models.Model):
         db_table = 'images'
 
     def __str__(self):
-        return self.image_name or self.image_path
+        return self.image_name or str(self.image_path)

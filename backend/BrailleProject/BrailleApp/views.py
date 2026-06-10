@@ -158,32 +158,58 @@ class ImageViewSet(viewsets.ViewSet):
             'updated_at': serializer.data['updated_at']
         }, status=status.HTTP_200_OK)
     
-    # POST /images/ - Create new image
     def create(self, request):
-        image_data = {
-            'folder': request.data.get('folder'),
-            'image_path': request.data.get('image_path'),
-            'image_name': request.data.get('image_name')
-        }
-        
-        serializer = ImageSerializer(data=image_data)
-        
-        if serializer.is_valid():
-            image = serializer.save()
+        try:
+            print("=" * 50)
+            print("Request FILES:", request.FILES)
+            print("Request DATA:", request.data)
+            
+            # Get folder ID
+            folder_id = request.data.get('folder')
+            folder = None
+            if folder_id and folder_id != 'null' and folder_id != 'undefined':
+                try:
+                    folder = Folder.objects.get(pk=folder_id)
+                except Folder.DoesNotExist:
+                    pass
+            
+            # Get the uploaded file
+            uploaded_file = request.FILES.get('image')
+            if not uploaded_file:
+                return Response({
+                    'status': 'error',
+                    'errors': 'No image file provided'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Get image name
+            image_name = request.data.get('image_name', uploaded_file.name)
+            
+            # Create image record with the file
+            image = Image.objects.create(
+                folder=folder,
+                image_path=uploaded_file,
+                image_name=image_name
+            )
+            
+            serializer = ImageSerializer(image)
+            data = serializer.data
+            if data.get('image_path'):
+                data['image_url'] = request.build_absolute_uri(data['image_path'])
             
             return Response({
-                'image_id': image.image_id,
-                'folder': image.folder.folder_id if image.folder else None,
-                'image_path': image.image_path,
-                'image_name': image.image_name,
-                'created_at': image.created_at,
-                'updated_at': image.updated_at
+                'status': 'success',
+                'message': 'Image uploaded successfully',
+                'data': data
             }, status=status.HTTP_201_CREATED)
-        
-        return Response({
-            'status': 'error',
-            'errors': serializer.errors
-        }, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Exception as e:
+            print("Error:", str(e))
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'status': 'error',
+                'errors': str(e)
+            }, status=status.HTTP_400_BAD_REQUEST)
     
     # PUT /images/{id}/ - Full update image
     def update(self, request, pk=None):
