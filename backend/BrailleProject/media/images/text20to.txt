@@ -1,0 +1,5 @@
+Hello, this is a sample text.
+
+This text was extracted from a document.
+
+It can be saved as a .txt file for later use.

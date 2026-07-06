@@ -4,6 +4,12 @@ from rest_framework.decorators import action
 from django.shortcuts import get_object_or_404
 from .models import *
 from .serializer import *
+from PIL import Image as PILImage
+from PIL import ImageEnhance, ImageFilter
+import io
+import cv2
+import numpy as np
+import base64
 
 
 # ─── FOLDER VIEWSET ────────────────────────────────────────────
@@ -128,6 +134,126 @@ class FolderViewSet(viewsets.ViewSet):
 
 # ─── IMAGE VIEWSET ────────────────────────────────────────────
 
+def straighten_image(img):
+    """
+    Detect skew angle, straighten the image, and crop to document boundaries
+    """
+    try:
+        # Convert PIL image to OpenCV format
+        if isinstance(img, PILImage.Image):
+            img_cv = np.array(img)
+            if len(img_cv.shape) == 3:
+                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
+            else:
+                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_GRAY2BGR)
+        else:
+            img_cv = img
+        
+        original_height, original_width = img_cv.shape[:2]
+        
+        # Convert to grayscale
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        
+        # Apply Gaussian blur
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Apply adaptive thresholding
+        binary = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            cv2.THRESH_BINARY, 11, 2
+        )
+        
+        # Find contours
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if contours:
+            # Get the largest contour (document)
+            largest = max(contours, key=cv2.contourArea)
+            
+            # Get the minimum area rectangle
+            rect = cv2.minAreaRect(largest)
+            angle = rect[2]
+            
+            # Adjust angle
+            if angle < -45:
+                angle = 90 + angle
+            elif angle > 45:
+                angle = angle - 90
+            
+            print(f"Detected skew angle: {angle} degrees")
+            
+            # Only straighten if angle is significant
+            if abs(angle) > 0.5:
+                # Get rotation matrix
+                center = (original_width // 2, original_height // 2)
+                rotation_matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+                
+                # Calculate new dimensions to fit entire image
+                cos = abs(rotation_matrix[0, 0])
+                sin = abs(rotation_matrix[0, 1])
+                new_width = int((original_height * sin) + (original_width * cos))
+                new_height = int((original_height * cos) + (original_width * sin))
+                
+                # Adjust rotation matrix
+                rotation_matrix[0, 2] += (new_width / 2) - center[0]
+                rotation_matrix[1, 2] += (new_height / 2) - center[1]
+                
+                # Apply rotation with white background
+                rotated = cv2.warpAffine(
+                    img_cv, rotation_matrix, (new_width, new_height),
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(255, 255, 255)
+                )
+                
+                # Now find the document in the rotated image
+                rotated_gray = cv2.cvtColor(rotated, cv2.COLOR_BGR2GRAY)
+                rotated_binary = cv2.adaptiveThreshold(
+                    rotated_gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                    cv2.THRESH_BINARY, 11, 2
+                )
+                
+                # Find contours in rotated image
+                rotated_contours, _ = cv2.findContours(
+                    rotated_binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                )
+                
+                if rotated_contours:
+                    # Get the largest contour (document)
+                    largest_rotated = max(rotated_contours, key=cv2.contourArea)
+                    
+                    # Get bounding rectangle
+                    x, y, w, h = cv2.boundingRect(largest_rotated)
+                    
+                    # Add small padding (5%)
+                    padding_x = int(w * 0.05)
+                    padding_y = int(h * 0.05)
+                    x = max(0, x - padding_x)
+                    y = max(0, y - padding_y)
+                    w = min(rotated.shape[1] - x, w + 2 * padding_x)
+                    h = min(rotated.shape[0] - y, h + 2 * padding_y)
+                    
+                    # Crop to document
+                    cropped = rotated[y:y+h, x:x+w]
+                    
+                    # Convert back to PIL Image
+                    straightened_pil = PILImage.fromarray(cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB))
+                    return straightened_pil
+                
+                # If contours not found in rotated image, return rotated but uncropped
+                straightened_pil = PILImage.fromarray(cv2.cvtColor(rotated, cv2.COLOR_BGR2RGB))
+                return straightened_pil
+        
+        # If no contours detected, return original
+        print("No document detected, returning original")
+        return img
+        
+    except Exception as e:
+        print(f"Straighten error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return img
+    
+    
 class ImageViewSet(viewsets.ViewSet):
     """
     Handle all Image operations
@@ -210,7 +336,63 @@ class ImageViewSet(viewsets.ViewSet):
                 'status': 'error',
                 'errors': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
-    
+        
+        
+    @action(detail=False, methods=['POST'])
+    def dewarp(self, request):
+        try:
+            uploaded_file = request.FILES.get('image')
+            if not uploaded_file:
+                return Response({
+                    'status': 'error',
+                    'message': 'No image provided'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Open image with PIL
+            img = PILImage.open(uploaded_file)
+            
+            # Step 1: Straighten the image (deskew)
+            print("Straightening image...")
+            img = straighten_image(img)
+            
+            # Step 2: Convert to grayscale for scanner effect
+            if img.mode != 'L':
+                img = img.convert('L')
+            
+            # Step 3: Enhance contrast (reduced from 2.0 to 1.2)
+            enhancer = ImageEnhance.Contrast(img)
+            img = enhancer.enhance(1.2)  # Lower contrast to keep details
+            
+            # Step 4: Enhance brightness (reduced from 1.5 to 1.1)
+            enhancer = ImageEnhance.Brightness(img)
+            img = enhancer.enhance(1.1)  # Lower brightness to avoid washing out
+            
+            # Step 5: Apply slight sharpening (optional - can be removed)
+            # img = img.filter(ImageFilter.SHARPEN)
+            
+            # Save to bytes with good quality
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='JPEG', quality=90)
+            img_byte_arr = img_byte_arr.getvalue()
+            
+            # Convert to base64
+            img_base64 = base64.b64encode(img_byte_arr).decode('utf-8')
+            
+            return Response({
+                'status': 'success',
+                'image': img_base64
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            print(f"Dewarp error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'status': 'error',
+                'message': str(e)
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+        
     # PUT /images/{id}/ - Full update image
     def update(self, request, pk=None):
         image = get_object_or_404(Image, pk=pk)

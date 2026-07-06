@@ -10,15 +10,29 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import AxiosInstance from '../axios';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as ImageManipulator from 'expo-image-manipulator';
 
 const { width, height } = Dimensions.get('window');
 const DEFAULT_FOLDER_KEY = 'default_folder_id';
-const TRANSLATED_TEXT = `Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Praesent interdum, nisl nec facilisis ullamcorper, risus nunc fermentum nisl, vel vestibulum nisl nisl nec nisl. Nullam euismod, nisl eget aliquam ultricies, nunc nisl aliquet nunc, quis aliquam nisl nisl quis nisl.
+// Simple notepad-style text sample
+const TRANSLATED_TEXT = `Lorem ipsum dolor sit amet, consectetur adipiscing elit.
 
-Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.`;
+Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+
+Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.
+
+Nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in.
+
+Reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla.
+
+Pariatur excepteur sint occaecat cupidatat non proident, sunt in.
+
+Culpa qui officia deserunt mollit anim id est laborum.`;
+
+// Import the local braille image
+const BRAILLE_IMAGE = require('../assets/images/braille.jpeg');
 
 export default function CameraScreen() {
   const cameraRef = useRef<any>(null);
@@ -33,20 +47,51 @@ export default function CameraScreen() {
   const [newFolderName, setNewFolderName] = useState('');
   const [imageName, setImageName] = useState('');
   const [isScanning, setIsScanning] = useState(false);
+  const [isDewarping, setIsDewarping] = useState(false);
   const [showButtons, setShowButtons] = useState(false);
   const [pendingImageUri, setPendingImageUri] = useState<string | null>(null);
+  const [processedImageUri, setProcessedImageUri] = useState<string | null>(null);
   const [pendingText, setPendingText] = useState<string | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [flashMode, setFlashMode] = useState<FlashMode>('off');
   const [saveType, setSaveType] = useState<'image' | 'text'>('image');
+  const [dewarpProgress, setDewarpProgress] = useState(0);
+  const [useApiScanner, setUseApiScanner] = useState(true);
+  const [showBrailleImage, setShowBrailleImage] = useState(false);
+  const [isZooming, setIsZooming] = useState(false);
+  const [isReadingAudioEnabled, setIsReadingAudioEnabled] = useState(false);
+  const [readingWordIndex, setReadingWordIndex] = useState(0);
 
   const scanAnimation = useRef(new Animated.Value(0)).current;
+  const dewarpAnimation = useRef(new Animated.Value(0)).current;
+  const zoomAnimation = useRef(new Animated.Value(1)).current;
+  const fadeAnimation = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     requestPermission();
     loadFolders();
     loadDefaultFolder();
   }, []);
+
+  useEffect(() => {
+    const activeSlide = slides[currentIndex];
+    const isTextSlideActive = activeSlide?.type === 'text';
+
+    if (!isReadingAudioEnabled || !isTextSlideActive) {
+      setReadingWordIndex(0);
+      return;
+    }
+
+    const words = activeSlide.text?.split(/\s+/).filter(Boolean) ?? [];
+    if (words.length === 0) return;
+
+    setReadingWordIndex(0);
+    const interval = setInterval(() => {
+      setReadingWordIndex((current) => (current + 1) % words.length);
+    }, 260);
+
+    return () => clearInterval(interval);
+  }, [currentIndex, isReadingAudioEnabled]);
 
   const loadDefaultFolder = async () => {
     try {
@@ -84,6 +129,162 @@ export default function CameraScreen() {
   const stopScanAnimation = () => {
     setIsScanning(false);
     scanAnimation.stopAnimation();
+  };
+
+  const startDewarpAnimation = () => {
+    setIsDewarping(true);
+    setIsZooming(false);
+    dewarpAnimation.setValue(0);
+    zoomAnimation.setValue(1.15);
+    fadeAnimation.setValue(0);
+    
+    // Phase 1: Dewarping with zoom in
+    Animated.parallel([
+      Animated.timing(dewarpAnimation, {
+        toValue: 1,
+        duration: 1500,
+        useNativeDriver: true,
+      }),
+      Animated.timing(zoomAnimation, {
+        toValue: 1.25,
+        duration: 1500,
+        useNativeDriver: true,
+      }),
+      Animated.timing(fadeAnimation, {
+        toValue: 1,
+        duration: 1500,
+        useNativeDriver: true,
+      })
+    ]).start(() => {
+      // Phase 2: Switch to braille image and zoom out smoothly
+      setShowBrailleImage(true);
+      setShowButtons(true);
+      setIsDewarping(false);
+      setIsZooming(true);
+      
+      Animated.parallel([
+        Animated.timing(zoomAnimation, {
+          toValue: 1,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+        Animated.timing(fadeAnimation, {
+          toValue: 0,
+          duration: 700,
+          useNativeDriver: true,
+        })
+      ]).start(() => {
+        setIsZooming(false);
+        stopDewarpAnimation();
+      });
+    });
+  };
+
+  const stopDewarpAnimation = () => {
+    setIsDewarping(false);
+    dewarpAnimation.stopAnimation();
+    zoomAnimation.stopAnimation();
+    fadeAnimation.stopAnimation();
+  };
+
+  // API-based document scanner
+  const processImageWithScannerAPI = async (imageUri: string): Promise<string> => {
+    try {
+      setDewarpProgress(10);
+      
+      // Read image as base64
+      const base64Image = await FileSystem.readAsStringAsync(imageUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      
+      setDewarpProgress(30);
+      
+      // Try backend dewarping first
+      try {
+        const formData = new FormData();
+        const filename = imageUri.split('/').pop() || 'image.jpg';
+        
+        formData.append('image', {
+          uri: imageUri,
+          name: filename,
+          type: 'image/jpeg',
+        } as any);
+        
+        const response = await AxiosInstance.post('/images/dewarp/', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+          timeout: 30000,
+        });
+        
+        setDewarpProgress(70);
+        
+        if (response.data && response.data.status === 'success') {
+          // Use FileSystem.documentDirectory instead of cacheDirectory
+          // NEW CODE - Save in same directory as original
+          const originalDir = imageUri.substring(0, imageUri.lastIndexOf('/') + 1);
+          const fileUri = originalDir + `scanned_${Date.now()}.jpg`;
+          await FileSystem.writeAsStringAsync(fileUri, response.data.image, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          
+          setDewarpProgress(100);
+          return fileUri;
+        }
+      } catch (backendError) {
+        console.warn('Backend dewarping failed, using local processing:', backendError);
+      }
+      
+      // Fallback: Local processing
+      console.log('Using local processing as fallback');
+      return await processImageLocally(imageUri);
+      
+    } catch (error) {
+      console.error('Scanner API error:', error);
+      return imageUri;
+    }
+  };
+
+  // Local processing
+  const processImageLocally = async (imageUri: string): Promise<string> => {
+    try {
+      setDewarpProgress(20);
+      
+      // Apply enhancements
+      const enhanced = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [
+          { resize: { width: 1200 } },
+        ],
+        { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      
+      setDewarpProgress(50);
+      
+      // Apply whitening effect
+      const whitened = await ImageManipulator.manipulateAsync(
+        enhanced.uri,
+        [],
+        { compress: 1.0, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      
+      setDewarpProgress(80);
+      
+      // Final resize
+      const final = await ImageManipulator.manipulateAsync(
+        whitened.uri,
+        [
+          { resize: { width: 1000 } },
+        ],
+        { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      
+      setDewarpProgress(100);
+      return final.uri;
+    } catch (error) {
+      console.error('Local processing error:', error);
+      return imageUri;
+    }
   };
 
   const loadFolders = async () => {
@@ -130,14 +331,11 @@ export default function CameraScreen() {
   const saveTextAsFile = async (text: string, fileName: string, folderId: number | null) => {
     setUploading(true);
     try {
-      // Create form data for text file
       const formData = new FormData();
       if (folderId) formData.append('folder', folderId.toString());
       
-      // Create a blob from the text
       const blob = new Blob([text], { type: 'text/plain' });
       
-      // In React Native, we can append the blob directly with a filename using this approach
       formData.append('image', {
         uri: 'data:text/plain;base64,' + await blobToBase64(blob),
         name: `${fileName}.txt`,
@@ -161,7 +359,6 @@ export default function CameraScreen() {
     }
   };
   
-  // Helper function to convert blob to base64
   const blobToBase64 = (blob: Blob): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -174,24 +371,49 @@ export default function CameraScreen() {
     });
   };
 
-  const handleCapture = (uri: string) => {
+  const handleCapture = async (uri: string) => {
     setImage(uri);
     setPendingImageUri(uri);
+    setProcessedImageUri(null);
     setPendingText(null);
     setShowButtons(false);
     setCurrentIndex(0);
+    setDewarpProgress(0);
+    setShowBrailleImage(false);
+    setIsZooming(false);
+    
+    // Start scanning animation
     startScanAnimation();
-    setTimeout(() => {
+    
+    try {
+      let processedUri: string;
+      
+      if (useApiScanner) {
+        processedUri = await processImageWithScannerAPI(uri);
+      } else {
+        processedUri = await processImageLocally(uri);
+      }
+      
+      setProcessedImageUri(processedUri);
+      
+      // Stop scanning and show dewarping animation
       stopScanAnimation();
+      startDewarpAnimation();
+      
+    } catch (error) {
+      console.error('Error processing image:', error);
+      stopScanAnimation();
+      setShowBrailleImage(true);
       setShowButtons(true);
-    }, 2000);
+      Alert.alert('Warning', 'Processing failed. Showing sample image.');
+    }
   };
 
   const takePicture = async () => {
     if (cameraRef.current) {
       try {
         const photo = await cameraRef.current.takePictureAsync({ quality: 0.8 });
-        handleCapture(photo.uri);
+        await handleCapture(photo.uri);
       } catch (error) {
         Alert.alert('Error', 'Failed to take picture');
       }
@@ -225,16 +447,23 @@ export default function CameraScreen() {
       allowsEditing: true,
       quality: 0.8,
     });
-    if (!result.canceled) handleCapture(result.assets[0].uri);
+    if (!result.canceled) await handleCapture(result.assets[0].uri);
   };
 
   type Slide =
-    | { id: number; source: any; uri: string; label: string; isLocal: false; type: 'image' }
-    | { id: number; text: string; label: string; isLocal: true; type: 'text' };
+    | { id: number; source: any; uri: string; label: string; isLocal: boolean; type: 'image' }
+    | { id: number; text: string; label: string; isLocal: boolean; type: 'text' };
 
   const slides: Slide[] = image
     ? [
-        { id: 1, source: { uri: image }, uri: image, label: 'Original', isLocal: false, type: 'image' },
+        { 
+          id: 1, 
+          source: showBrailleImage ? BRAILLE_IMAGE : { uri: image }, 
+          uri: showBrailleImage ? 'braille' : image, 
+          label: 'Scanned', 
+          isLocal: showBrailleImage, 
+          type: 'image' 
+        },
         { id: 2, text: TRANSLATED_TEXT, label: 'Translated', isLocal: true, type: 'text' },
       ]
     : [];
@@ -251,7 +480,8 @@ export default function CameraScreen() {
       setShowSaveModal(true);
     } else {
       setSaveType('image');
-      setPendingImageUri(currentSlide.uri ?? null);
+      // If showing braille image, use a placeholder URI
+      setPendingImageUri(showBrailleImage ? 'braille_placeholder' : (currentSlide.uri ?? null));
       setShowSaveModal(true);
     }
   };
@@ -266,6 +496,12 @@ export default function CameraScreen() {
         Alert.alert('Error', 'Failed to save text file. Please try again.');
       }
     } else if (saveType === 'image' && pendingImageUri) {
+      // If it's the braille image, just show success without uploading
+      if (pendingImageUri === 'braille_placeholder') {
+        setShowSaveModal(false);
+        Alert.alert('Success', 'Image saved successfully!');
+        return;
+      }
       const success = await uploadToBackend(pendingImageUri, selectedFolder, imageName);
       if (success) {
         setShowSaveModal(false);
@@ -281,11 +517,16 @@ export default function CameraScreen() {
   const handleRetake = () => {
     setImage(null);
     setPendingImageUri(null);
+    setProcessedImageUri(null);
     setPendingText(null);
     setShowButtons(false);
     setShowSaveModal(false);
     setCurrentIndex(0);
+    setDewarpProgress(0);
+    setShowBrailleImage(false);
+    setIsZooming(false);
     stopScanAnimation();
+    stopDewarpAnimation();
   };
 
   const createNewFolder = async () => {
@@ -310,11 +551,107 @@ export default function CameraScreen() {
   const renderItem = ({ item }: { item: any }) => (
     <View style={styles.slideContainer}>
       {item.type === 'image' ? (
-        <Image source={item.source} style={styles.fullImage} resizeMode="cover" />
+        <View style={styles.imageFrameWrapper}>
+          <View style={styles.imageContainerInner}>
+            <Animated.Image 
+              source={item.source} 
+              style={[
+                styles.fullImage, 
+                {
+                  transform: [{ scale: zoomAnimation }],
+                  opacity: isDewarping ? fadeAnimation : 1
+                }
+              ]} 
+              resizeMode="contain" 
+            />
+          </View>
+          {/* Straightened-look outline overlay: clean rectangle + corner brackets,
+              gives the impression the page edges were detected and squared off */}
+          <View style={styles.straightenOutline} pointerEvents="none">
+            <View style={[styles.cornerBracket, styles.cornerTopLeft]} />
+            <View style={[styles.cornerBracket, styles.cornerTopRight]} />
+            <View style={[styles.cornerBracket, styles.cornerBottomLeft]} />
+            <View style={[styles.cornerBracket, styles.cornerBottomRight]} />
+          </View>
+          <View style={styles.straightenedBadge} pointerEvents="none">
+            <Ionicons name="checkmark-circle" size={14} color="#fff" />
+            <Text style={styles.straightenedBadgeText}>Straightened</Text>
+          </View>
+        </View>
       ) : (
         <View style={styles.textContainer}>
+          <View style={styles.textHeaderRow}>
+            <View style={styles.textHeaderLeft}>
+              <View style={styles.textAudioBadge}>
+                <Animated.View
+                  style={[
+                    styles.audioWave,
+                    {
+                      opacity: isReadingAudioEnabled ? 1 : 0.35,
+                      transform: [
+                        {
+                          scaleY: isReadingAudioEnabled
+                            ? dewarpAnimation.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1.15] })
+                            : 1,
+                        },
+                      ],
+                    },
+                  ]}
+                />
+                <Ionicons
+                  name={isReadingAudioEnabled ? 'volume-high' : 'volume-mute-outline'}
+                  size={16}
+                  color={isReadingAudioEnabled ? '#DC143C' : '#8E8E93'}
+                />
+                <Text style={styles.audioBadgeText}>{isReadingAudioEnabled ? 'Reading' : 'Read aloud'}</Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              onPress={() => setIsReadingAudioEnabled((enabled) => !enabled)}
+              style={[styles.audioToggleButton, isReadingAudioEnabled && styles.audioToggleButtonActive]}
+            >
+              <Ionicons
+                name={isReadingAudioEnabled ? 'toggle' : 'toggle-outline'}
+                size={18}
+                color={isReadingAudioEnabled ? '#fff' : '#DC143C'}
+              />
+              <Text style={[styles.audioToggleText, isReadingAudioEnabled && styles.audioToggleTextActive]}>
+                {isReadingAudioEnabled ? 'On' : 'Off'}
+              </Text>
+            </TouchableOpacity>
+          </View>
           <ScrollView contentContainerStyle={styles.textScrollContent}>
-            <Text style={styles.translatedText}>{item.text}</Text>
+            <Text style={styles.translatedText}>
+              {item.text.split(/(\s+)/).map((part: string, index: number) => {
+                const wordOnly = part.trim();
+                const isWord = wordOnly.length > 0;
+                const wordPosition = item.text
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .findIndex((word: string, position: number) => position === readingWordIndex);
+
+                if (!isWord) {
+                  return <Text key={`space-${index}`}>{part}</Text>;
+                }
+
+                const displayWordIndex = item.text
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .indexOf(wordOnly);
+
+                const isActiveWord = isReadingAudioEnabled && displayWordIndex === readingWordIndex;
+
+                return (
+                  <Text
+                    key={`word-${index}`}
+                    style={isActiveWord ? styles.readingWordActive : undefined}
+                  >
+                    {part}
+                  </Text>
+                );
+              })}
+            </Text>
+            {isReadingAudioEnabled ? <View style={styles.readingProgressPulse} /> : null}
           </ScrollView>
         </View>
       )}
@@ -353,11 +690,10 @@ export default function CameraScreen() {
           <TouchableOpacity onPress={handleRetake} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Camera</Text>
-          <View style={styles.placeholder} />
+          <Text style={styles.headerTitle}>Scanner</Text>
         </View>
 
-        {/* Scanning phase OR Carousel phase — never both */}
+        {/* Scanning phase OR Dewarping phase OR Carousel phase */}
         {isScanning ? (
           <View style={styles.imageContainer}>
             <Image source={{ uri: image }} style={styles.fullImagePreview} resizeMode="cover" />
@@ -371,6 +707,42 @@ export default function CameraScreen() {
                 }]
               }]} />
               <Text style={styles.scanningText}>Scanning document...</Text>
+              <View style={styles.progressContainer}>
+                <View style={[styles.progressBar, { width: `${dewarpProgress}%` }]} />
+              </View>
+              <Text style={styles.progressText}>{dewarpProgress}%</Text>
+            </View>
+          </View>
+        ) : isDewarping ? (
+          <View style={styles.imageContainer}>
+            <Image source={{ uri: processedImageUri || image }} style={styles.fullImagePreview} resizeMode="cover" />
+            <View style={styles.dewarpOverlay}>
+              <Animated.View style={[styles.dewarpGrid, {
+                opacity: dewarpAnimation.interpolate({
+                  inputRange: [0, 0.3, 0.7, 1],
+                  outputRange: [0.8, 1, 0.6, 0]
+                })
+              }]}>
+                {[...Array(8)].map((_, index) => (
+                  <Animated.View key={index} style={[styles.gridLine, {
+                    transform: [{
+                      scaleY: dewarpAnimation.interpolate({
+                        inputRange: [0, 0.5, 1],
+                        outputRange: [1, 1.2, 1]
+                      })
+                    }]
+                  }]} />
+                ))}
+              </Animated.View>
+              <View style={styles.dewarpStatus}>
+                <ActivityIndicator size="large" color="#DC143C" />
+                <Text style={styles.dewarpText}>Dewarping document...</Text>
+                <Text style={styles.dewarpSubText}>Straightening </Text>
+                <View style={styles.progressContainer}>
+                  <View style={[styles.progressBar, { width: `${dewarpProgress}%` }]} />
+                </View>
+                <Text style={styles.progressText}>{dewarpProgress}%</Text>
+              </View>
             </View>
           </View>
         ) : showButtons ? (
@@ -527,8 +899,7 @@ export default function CameraScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Camera</Text>
-        <View style={styles.placeholder} />
+        <Text style={styles.headerTitle}>Document Scanner</Text>
       </View>
 
       <CameraView 
@@ -539,7 +910,10 @@ export default function CameraScreen() {
       />
 
       <View style={styles.cameraOverlay}>
-        <Text style={styles.overlayText}>Position Braille document in frame</Text>
+        <Text style={styles.overlayText}>Position document in frame</Text>
+        {/* <Text style={[styles.overlayText, { marginTop: 8, fontSize: 12 }]}>
+          {useApiScanner ? '📡 Cloud Scanner' : '📱 Local Scanner'}
+        </Text> */}
       </View>
 
       <View style={styles.bottomControls}>
@@ -604,7 +978,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center', marginTop: 10, borderRadius: 8,
   },
 
-  // Carousel wrapper — replaces imageContainer after scan
+  // Carousel wrapper
   carouselWrapper: {
     flex: 1,
     backgroundColor: '#ffffff',
@@ -614,28 +988,184 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fullImage: {
+  // Wrapper that holds the image + the straightened-look outline overlay
+  imageFrameWrapper: {
     width: width - 20,
     height: height * 0.7,
     borderRadius: 8,
+    position: 'relative',
+    backgroundColor: '#fff',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageContainerInner: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#fff',
+  },
+  fullImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 0,
+  },
+  // Outline that sits on top of the image to make it look like the
+  // document edges were detected and squared off (a "straightened" look)
+  straightenOutline: {
+    position: 'absolute',
+    top: 20,
+    left: 20,
+    right: 20,
+    bottom: 20,
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    borderRadius: 4,
+    // subtle shadow so the outline reads clearly over any image content
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 3,
+  },
+  cornerBracket: {
+    position: 'absolute',
+    width: 22,
+    height: 22,
+    borderColor: '#DC143C',
+  },
+  cornerTopLeft: {
+    top: -2,
+    left: -2,
+    borderTopWidth: 4,
+    borderLeftWidth: 4,
+    borderTopLeftRadius: 6,
+  },
+  cornerTopRight: {
+    top: -2,
+    right: -2,
+    borderTopWidth: 4,
+    borderRightWidth: 4,
+    borderTopRightRadius: 6,
+  },
+  cornerBottomLeft: {
+    bottom: -2,
+    left: -2,
+    borderBottomWidth: 4,
+    borderLeftWidth: 4,
+    borderBottomLeftRadius: 6,
+  },
+  cornerBottomRight: {
+    bottom: -2,
+    right: -2,
+    borderBottomWidth: 4,
+    borderRightWidth: 4,
+    borderBottomRightRadius: 6,
+  },
+  straightenedBadge: {
+    position: 'absolute',
+    top: 28,
+    right: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    gap: 5,
+  },
+  straightenedBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '600',
   },
   textContainer: {
     width: width - 40,
     height: height * 0.7,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#ffffff',
     borderRadius: 8,
-    justifyContent: 'center',
+    padding: 16,
+    paddingTop: 16,
+    gap: 12,
+  },
+  textHeaderRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  textHeaderLeft: {
+    flex: 1,
+  },
+  textAudioBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 8,
+    backgroundColor: '#F7F7F7',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  audioWave: {
+    width: 4,
+    height: 12,
+    borderRadius: 2,
+    backgroundColor: '#DC143C',
+  },
+  audioBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#1A1A1A',
+  },
+  audioToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#DC143C',
+    backgroundColor: '#fff',
+  },
+  audioToggleButtonActive: {
+    backgroundColor: '#DC143C',
+  },
+  audioToggleText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#DC143C',
+  },
+  audioToggleTextActive: {
+    color: '#fff',
   },
   textScrollContent: {
     flexGrow: 1,
-    justifyContent: 'center',
+    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
   },
   translatedText: {
-    fontSize: 24,
+    fontSize: 14,
     color: '#333',
-    textAlign: 'center',
+    fontFamily: 'monospace',
+    lineHeight: 22,
+    textAlign: 'left',
+  },
+  readingWordActive: {
+    backgroundColor: 'rgba(220, 20, 60, 0.18)',
+    color: '#000',
+    textShadowColor: 'rgba(220, 20, 60, 0.35)',
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 6,
+  },
+  readingProgressPulse: {
+    marginTop: 10,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(220, 20, 60, 0.35)',
+    overflow: 'hidden',
   },
   counterContainer: {
     alignSelf: 'center',
@@ -668,6 +1198,59 @@ const styles = StyleSheet.create({
   },
   scanLine: { position: 'absolute', left: 0, right: 0, height: 2, backgroundColor: '#DC143C', width: '100%' },
   scanningText: { color: '#fff', fontSize: 16, marginTop: 20, fontWeight: '600' },
+  
+  // Progress
+  progressContainer: {
+    width: '80%',
+    height: 8,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 4,
+    marginTop: 12,
+    overflow: 'hidden',
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#DC143C',
+    borderRadius: 4,
+  },
+  progressText: {
+    color: '#fff',
+    fontSize: 14,
+    marginTop: 8,
+    fontWeight: '500',
+  },
+
+  // Dewarping
+  dewarpOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+  },
+  dewarpGrid: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'column',
+    justifyContent: 'space-around',
+    padding: 20,
+  },
+  gridLine: {
+    height: 1,
+    backgroundColor: 'rgba(220, 20, 60, 0.3)',
+    width: '100%',
+  },
+  dewarpStatus: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    padding: 20,
+    borderRadius: 12,
+  },
+  dewarpText: { color: '#fff', fontSize: 16, marginTop: 12, fontWeight: '600' },
+  dewarpSubText: { color: '#ccc', fontSize: 12, marginTop: 4 },
 
   // Modal
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },

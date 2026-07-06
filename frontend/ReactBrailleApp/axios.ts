@@ -1,12 +1,40 @@
+// axios.ts
 import axios from 'axios';
-import { API_BASE_URL } from './config';
+import { API_BASE_URL, getImageUrl } from './config';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
+});
+
+// Response interceptor to automatically add image_url
+api.interceptors.response.use((response) => {
+  // Handle array of images
+  if (response.data?.images && Array.isArray(response.data.images)) {
+    response.data.images = response.data.images.map((img: any) => ({
+      ...img,
+      image_url: getImageUrl(img.image_path),
+      is_text: img.image_path?.endsWith('.txt') || false,
+    }));
+  }
+  
+  // Handle single image
+  if (response.data?.image_path) {
+    response.data.image_url = getImageUrl(response.data.image_path);
+  }
+  
+  // Handle nested data
+  if (response.data?.data?.image_path) {
+    response.data.data.image_url = getImageUrl(response.data.data.image_path);
+  }
+  
+  return response;
+}, (error) => {
+  console.error('API Error:', error.response?.data || error.message);
+  return Promise.reject(error);
 });
 
 export default api;

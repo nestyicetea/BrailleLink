@@ -1,15 +1,10 @@
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { usePathname } from 'expo-router';
 
 export default function TopNav() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>BrailleLink</Text>
-      <TouchableOpacity style={styles.profileButton}>
-        <View style={styles.profileCircle}>
-          <Text style={styles.profileInitial}>B</Text>
-        </View>
-      </TouchableOpacity>
     </View>
   );
 }
@@ -30,21 +25,5 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
-  },
-  profileButton: {
-    padding: 5,
-  },
-  profileCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#DC143C',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  profileInitial: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
   },
 });

@@ -4,7 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AxiosInstance from '../axios';
 
-const { width } = Dimensions.get('window');
+const { width, height } = Dimensions.get('window');
 const COLUMN_WIDTH = (width - 48) / 3;
 
 interface ImageItem {
@@ -15,6 +15,8 @@ interface ImageItem {
   image_url?: string;
   created_at: string;
   updated_at: string;
+  is_text?: boolean;
+  text_content?: string;
 }
 
 export default function ViewFolderScreen() {
@@ -26,10 +28,11 @@ export default function ViewFolderScreen() {
   const [selectedImages, setSelectedImages] = useState<number[]>([]);
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [showViewModal, setShowViewModal] = useState(false);
-  const [selectedImage, setSelectedImage] = useState<ImageItem | null>(null);
+  const [selectedItem, setSelectedItem] = useState<ImageItem | null>(null);
   const [showRenameModal, setShowRenameModal] = useState(false);
-  const [renamingImage, setRenamingImage] = useState<ImageItem | null>(null);
-  const [newImageName, setNewImageName] = useState('');
+  const [renamingItem, setRenamingItem] = useState<ImageItem | null>(null);
+  const [newItemName, setNewItemName] = useState('');
+  const [isTextViewModal, setIsTextViewModal] = useState(false);
 
   useEffect(() => {
     loadFolderContents();
@@ -45,14 +48,7 @@ export default function ViewFolderScreen() {
           created_at: response.data.created_at,
           updated_at: response.data.updated_at,
         });
-        
-        const imagesList = response.data.images || [];
-        // Build full image URLs
-        const imagesWithUrls = imagesList.map((img: any) => ({
-          ...img,
-          image_url: img.image_path ? `http://192.168.254.100:8000${img.image_path}` : null
-        }));
-        setImages(imagesWithUrls);
+        setImages(response.data.images || []);
       }
     } catch (error) {
       console.error('Error loading folder contents:', error);
@@ -62,24 +58,50 @@ export default function ViewFolderScreen() {
     }
   };
 
+  const fetchTextContent = async (item: ImageItem) => {
+    if (!item.image_url) return null;
+    try {
+      const response = await AxiosInstance.get(item.image_url, {
+        responseType: 'text',
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching text content:', error);
+      return null;
+    }
+  };
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadFolderContents();
     setRefreshing(false);
   }, []);
 
-  const handleImagePress = (image: ImageItem) => {
+  const handleItemPress = async (item: ImageItem) => {
     if (isSelectionMode) {
-      toggleSelection(image.image_id);
-    } else {
-      setSelectedImage(image);
-      setShowViewModal(true);
+      toggleSelection(item.image_id);
+      return;
+    }
+
+    setSelectedItem(item);
+    setIsTextViewModal(false);
+    setShowViewModal(true);
+
+    if (item.is_text) {
+      const content = await fetchTextContent(item);
+      if (content) {
+        setSelectedItem({ ...item, text_content: content });
+        setIsTextViewModal(true);
+      } else {
+        Alert.alert('Error', 'Failed to load text content');
+        setShowViewModal(false);
+      }
     }
   };
 
-  const handleLongPress = (image: ImageItem) => {
+  const handleLongPress = (item: ImageItem) => {
     setIsSelectionMode(true);
-    toggleSelection(image.image_id);
+    toggleSelection(item.image_id);
   };
 
   const toggleSelection = (imageId: number) => {
@@ -95,8 +117,8 @@ export default function ViewFolderScreen() {
 
   const handleDeleteSelected = () => {
     Alert.alert(
-      'Delete Images',
-      `Are you sure you want to delete ${selectedImages.length} image(s)?`,
+      'Delete Items',
+      `Are you sure you want to delete ${selectedImages.length} item(s)?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -110,10 +132,10 @@ export default function ViewFolderScreen() {
               setImages(images.filter(img => !selectedImages.includes(img.image_id)));
               setSelectedImages([]);
               setIsSelectionMode(false);
-              Alert.alert('Success', `${selectedImages.length} image(s) deleted successfully`);
+              Alert.alert('Success', `${selectedImages.length} item(s) deleted successfully`);
             } catch (error) {
-              console.error('Error deleting images:', error);
-              Alert.alert('Error', 'Failed to delete some images');
+              console.error('Error deleting items:', error);
+              Alert.alert('Error', 'Failed to delete some items');
             }
           }
         }
@@ -125,27 +147,27 @@ export default function ViewFolderScreen() {
     Alert.alert('Copy', 'Copy feature coming soon!');
   };
 
-  const handleRenameImage = async () => {
-    if (!renamingImage || !newImageName.trim()) return;
+  const handleRenameItem = async () => {
+    if (!renamingItem || !newItemName.trim()) return;
     
     try {
-      const response = await AxiosInstance.patch(`/images/${renamingImage.image_id}/`, {
-        image_name: newImageName.trim()
+      const response = await AxiosInstance.patch(`/images/${renamingItem.image_id}/`, {
+        image_name: newItemName.trim()
       });
       if (response.data) {
         setImages(images.map(img => 
-          img.image_id === renamingImage.image_id 
-            ? { ...img, image_name: newImageName.trim() }
+          img.image_id === renamingItem.image_id 
+            ? { ...img, image_name: newItemName.trim() }
             : img
         ));
-        Alert.alert('Success', 'Image renamed successfully');
+        Alert.alert('Success', 'Item renamed successfully');
         setShowRenameModal(false);
-        setRenamingImage(null);
-        setNewImageName('');
+        setRenamingItem(null);
+        setNewItemName('');
       }
     } catch (error) {
-      console.error('Error renaming image:', error);
-      Alert.alert('Error', 'Failed to rename image');
+      console.error('Error renaming item:', error);
+      Alert.alert('Error', 'Failed to rename item');
     }
   };
 
@@ -155,19 +177,24 @@ export default function ViewFolderScreen() {
     return date.toLocaleDateString();
   };
 
-  const renderImageItem = (item: ImageItem) => {
+  const renderItem = (item: ImageItem) => {
     const isSelected = selectedImages.includes(item.image_id);
     
     return (
       <TouchableOpacity
         key={item.image_id}
         style={[styles.gridItem, isSelected && styles.selectedItem]}
-        onPress={() => handleImagePress(item)}
+        onPress={() => handleItemPress(item)}
         onLongPress={() => handleLongPress(item)}
         activeOpacity={0.7}
       >
         <View style={styles.imageContainer}>
-          {item.image_url ? (
+          {item.is_text ? (
+            <View style={styles.textFileContainer}>
+              <Ionicons name="document-text-outline" size={40} color="#DC143C" />
+              <Text style={styles.textFileLabel}>TXT</Text>
+            </View>
+          ) : item.image_url ? (
             <Image source={{ uri: item.image_url }} style={styles.thumbnail} />
           ) : (
             <View style={styles.placeholderImage}>
@@ -181,15 +208,20 @@ export default function ViewFolderScreen() {
           )}
         </View>
         <TouchableOpacity onPress={() => {
-          setRenamingImage(item);
-          setNewImageName(item.image_name || '');
+          setRenamingItem(item);
+          setNewItemName(item.image_name || '');
           setShowRenameModal(true);
         }}>
-          <Text style={styles.imageName} numberOfLines={1}>
+          <Text style={styles.itemName} numberOfLines={1}>
             {item.image_name || 'Unnamed'}
           </Text>
         </TouchableOpacity>
-        <Text style={styles.imageDate}>{formatDate(item.created_at)}</Text>
+        <Text style={styles.itemDate}>{formatDate(item.created_at)}</Text>
+        {item.is_text && (
+          <View style={styles.fileTypeBadge}>
+            <Text style={styles.fileTypeText}>TXT</Text>
+          </View>
+        )}
       </TouchableOpacity>
     );
   };
@@ -200,7 +232,7 @@ export default function ViewFolderScreen() {
       const rowItems = images.slice(i, i + 3);
       rows.push(
         <View key={i} style={styles.row}>
-          {rowItems.map(renderImageItem)}
+          {rowItems.map(renderItem)}
           {rowItems.length < 3 && Array(3 - rowItems.length).fill(null).map((_, idx) => (
             <View key={`empty-${idx}`} style={styles.gridItem} />
           ))}
@@ -213,7 +245,7 @@ export default function ViewFolderScreen() {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Loading images...</Text>
+        <Text style={styles.loadingText}>Loading contents...</Text>
       </View>
     );
   }
@@ -254,13 +286,13 @@ export default function ViewFolderScreen() {
           </View>
         ) : (
           <>
-            <Text style={styles.statsText}>{images.length} images</Text>
+            <Text style={styles.statsText}>{images.length} items</Text>
             <Text style={styles.statsDate}>Created: {formatDate(folderInfo?.created_at)}</Text>
           </>
         )}
       </View>
 
-      {/* Image Grid */}
+      {/* Grid */}
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -275,12 +307,12 @@ export default function ViewFolderScreen() {
         {images.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>📭</Text>
-            <Text style={styles.emptyText}>No images in this folder</Text>
+            <Text style={styles.emptyText}>No items in this folder</Text>
             <TouchableOpacity 
               style={styles.emptyButton} 
               onPress={() => router.push('/camera')}
             >
-              <Text style={styles.emptyButtonText}>Add Images</Text>
+              <Text style={styles.emptyButtonText}>Add Items</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -291,17 +323,45 @@ export default function ViewFolderScreen() {
         <View style={styles.bottomSpacing} />
       </ScrollView>
 
-      {/* Image View Modal */}
+      {/* View Modal - Full screen for both images and text */}
       <Modal visible={showViewModal} transparent animationType="none" onRequestClose={() => setShowViewModal(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
+            {/* Close Button */}
             <TouchableOpacity style={styles.modalClose} onPress={() => setShowViewModal(false)}>
-              <Ionicons name="close" size={28} color="#fff" />
+              <Ionicons name="close" size={30} color="#1A1A1A" />
             </TouchableOpacity>
-            {selectedImage && selectedImage.image_url && (
-              <Image source={{ uri: selectedImage.image_url }} style={styles.fullImageModal} resizeMode="contain" />
-            )}
-            <Text style={styles.modalImageName}>{selectedImage?.image_name || 'Unnamed'}</Text>
+
+            {/* File Name at top */}
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalHeaderTitle}>
+                {selectedItem?.image_name || 'Unnamed'}
+                {selectedItem?.is_text ? '.txt' : ''}
+              </Text>
+            </View>
+            
+            {isTextViewModal && selectedItem?.text_content ? (
+              // Full screen text view
+              <View style={styles.fullScreenTextView}>
+                <ScrollView 
+                  style={styles.fullScreenTextScroll} 
+                  contentContainerStyle={styles.fullScreenTextContent}
+                  showsVerticalScrollIndicator={true}
+                  indicatorStyle="black"
+                >
+                  <Text style={styles.fullScreenText}>{selectedItem.text_content}</Text>
+                </ScrollView>
+              </View>
+            ) : selectedItem?.image_url && !selectedItem.is_text ? (
+              // Full screen image view
+              <View style={styles.fullScreenImageView}>
+                <Image 
+                  source={{ uri: selectedItem.image_url }} 
+                  style={styles.fullScreenImage} 
+                  resizeMode="contain" 
+                />
+              </View>
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -311,7 +371,7 @@ export default function ViewFolderScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.renameModalContent}>
             <View style={styles.renameModalHeader}>
-              <Text style={styles.renameModalTitle}>Rename Image</Text>
+              <Text style={styles.renameModalTitle}>Rename Item</Text>
               <TouchableOpacity onPress={() => setShowRenameModal(false)}>
                 <Ionicons name="close" size={24} color="#8E8E93" />
               </TouchableOpacity>
@@ -320,15 +380,15 @@ export default function ViewFolderScreen() {
               style={styles.renameInput}
               placeholder="Enter new name"
               placeholderTextColor="#C7C7CC"
-              value={newImageName}
-              onChangeText={setNewImageName}
+              value={newItemName}
+              onChangeText={setNewItemName}
               autoFocus
             />
             <View style={styles.renameButtons}>
               <TouchableOpacity style={styles.renameCancelBtn} onPress={() => setShowRenameModal(false)}>
                 <Text style={styles.renameCancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.renameSaveBtn} onPress={handleRenameImage}>
+              <TouchableOpacity style={styles.renameSaveBtn} onPress={handleRenameItem}>
                 <Text style={styles.renameSaveText}>Save</Text>
               </TouchableOpacity>
             </View>
@@ -464,6 +524,19 @@ const styles = StyleSheet.create({
     fontSize: 34,
     opacity: 0.5,
   },
+  textFileContainer: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F0F0F0',
+  },
+  textFileLabel: {
+    fontSize: 10,
+    color: '#DC143C',
+    fontWeight: 'bold',
+    marginTop: 2,
+  },
   checkmarkOverlay: {
     position: 'absolute',
     top: 8,
@@ -471,17 +544,31 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.9)',
     borderRadius: 12,
   },
-  imageName: {
+  itemName: {
     fontSize: 12,
     fontWeight: '500',
     color: '#1A1A1A',
     textAlign: 'center',
   },
-  imageDate: {
+  itemDate: {
     fontSize: 10,
     color: '#8E8E93',
     textAlign: 'center',
     marginTop: 2,
+  },
+  fileTypeBadge: {
+    position: 'absolute',
+    top: 4,
+    left: 4,
+    backgroundColor: '#DC143C',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  fileTypeText: {
+    color: '#FFFFFF',
+    fontSize: 8,
+    fontWeight: 'bold',
   },
   emptyContainer: {
     alignItems: 'center',
@@ -516,31 +603,65 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
   },
   modalContent: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
+    flex: 1,
+    backgroundColor: '#FFFFFF',
   },
   modalClose: {
     position: 'absolute',
     top: 50,
     right: 20,
     zIndex: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(0,0,0,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  fullImageModal: {
-    width: width - 40,
-    height: (width - 40) * 1.3,
+  modalHeader: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    right: 80,
+    zIndex: 10,
   },
-  modalImageName: {
-    color: '#fff',
+  modalHeaderTitle: {
+    color: '#1A1A1A', 
     fontSize: 16,
-    marginTop: 20,
-    textAlign: 'center',
+    fontWeight: '600',
+    opacity: 0.9,
+  },
+  fullScreenImageView: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingTop: 100,
+    paddingBottom: 40,
+  },
+  fullScreenImage: {
+    width: width,
+    height: height * 0.8,
+  },
+  fullScreenTextView: {
+    flex: 1,
+    paddingTop: 110,
+    paddingHorizontal: 24,
+    paddingBottom: 40,
+  },
+  fullScreenTextScroll: {
+    flex: 1,
+  },
+  fullScreenTextContent: {
+    paddingVertical: 10,
+  },
+  fullScreenText: {
+    fontSize: 16,
+    color: '#1A1A1A',
+    fontFamily: 'monospace',
+    lineHeight: 26,
   },
   renameModalContent: {
     backgroundColor: '#FFFFFF',
