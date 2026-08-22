@@ -6,6 +6,7 @@ from .models import *
 from .serializer import *
 from PIL import Image as PILImage
 from PIL import ImageEnhance, ImageFilter
+from .image_processing import process_braille_image
 import io
 import cv2
 import numpy as np
@@ -252,8 +253,235 @@ def straighten_image(img):
         import traceback
         traceback.print_exc()
         return img
+
+def level_background(gray, blur_ksize=101, clip_limit=2.0, tile_grid_size=(8, 8)):
+    """
+    Stage 1: background leveling + illumination compensation (CLAHE).
+    Estimates the slow-changing paper tone/lighting with a large blur,
+    divides it out to cancel discoloration and uneven room light, then
+    CLAHE re-punches local contrast so the dot relief shading reads clearly.
+    """
+    gray = gray.astype(np.float32)
+
+    background = cv2.GaussianBlur(gray, (blur_ksize, blur_ksize), 0)
+    background[background == 0] = 1  # avoid divide-by-zero
+
+    leveled = cv2.divide(gray, background, scale=255)
+    leveled = np.clip(leveled, 0, 255).astype(np.uint8)
+
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+    return clahe.apply(leveled)
+# ─── ALGORITHM 1: FIRST-ORDER SPATIAL DERIVATIVE SHADOW GRADIENT FILTERING ───
+
+def process_algorithm1(img):
+    """
+    Algorithm 1: First-Order Spatial Derivative Shadow Gradient Filtering
     
+    Mathematical formulation:
+    Gx = I * Kx = ∂I/∂x    (Horizontal gradient)
+    Gy = I * Ky = ∂I/∂y    (Vertical gradient)
+    M(x,y) = √(Gx² + Gy²)  (Gradient magnitude)
+    θ(x,y) = tan⁻¹(Gy/Gx)  (Orientation angle)
     
+    This algorithm suppresses background clutter (folds, edges, lighting variations)
+    while preserving Braille dots using gradient-based filtering.
+    """
+    try:
+        # Convert PIL to OpenCV
+        if isinstance(img, PILImage.Image):
+            img_cv = np.array(img)
+            if len(img_cv.shape) == 3:
+                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
+            else:
+                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_GRAY2BGR)
+        else:
+            img_cv = img
+        
+        if img_cv is None:
+            raise ValueError("Could not load image")
+        
+        # Step 1: Convert to grayscale
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+        
+        # Step 2: Normalize image for stable gradient calculation
+        gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+        
+        # Step 3: Apply Gaussian blur to reduce noise (preserve dot edges)
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+        
+        # Step 4: Calculate horizontal gradient Gx = ∂I/∂x using Sobel
+        Gx = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
+        
+        # Step 5: Calculate vertical gradient Gy = ∂I/∂y using Sobel
+        Gy = cv2.Sobel(blurred, cv2.CV_64F, 0, 1, ksize=3)
+        
+        # Step 6: Calculate gradient magnitude M(x,y) = √(Gx² + Gy²)
+        magnitude = np.sqrt(Gx**2 + Gy**2)
+        magnitude = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
+        magnitude = magnitude.astype(np.uint8)
+        
+        # Step 7: Calculate gradient orientation θ(x,y) = atan2(Gy, Gx)
+        orientation = np.arctan2(Gy, Gx)
+        
+        # Step 8: Suppress background clutter
+        # Use large Gaussian blur to estimate background illumination
+        background = cv2.GaussianBlur(magnitude, (51, 51), 0)
+        
+        # Subtract background to remove low-frequency variations
+        suppressed = cv2.subtract(magnitude, background)
+        suppressed = cv2.normalize(suppressed, None, 0, 255, cv2.NORM_MINMAX)
+        suppressed = suppressed.astype(np.uint8)
+        
+        # Step 9: Apply adaptive thresholding to get binary mask
+        # Otsu's method automatically determines optimal threshold
+        _, binary = cv2.threshold(suppressed, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Step 10: Morphological cleaning - preserve dot structures
+        kernel = np.ones((3, 3), np.uint8)
+        
+        # Opening removes small noise (erosion then dilation)
+        opened = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        
+        # Closing fills small holes in dots (dilation then erosion)
+        closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel)
+        
+        # Step 11: Filter connected components by area to keep only Braille dots
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Create final mask with white background
+        final_mask = np.full_like(closed, 255)  # Start with all white (255)
+        
+        # Parameters for Braille dot filtering
+        min_dot_area = 10
+        max_dot_area = 200
+        
+        dot_count = 0
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if min_dot_area < area < max_dot_area:
+                # This is a Braille dot - draw it in black (0) on white background
+                cv2.drawContours(final_mask, [cnt], -1, 0, -1)  # 0 = black
+                dot_count += 1
+        
+        # Step 12: Create overlay - original with green highlighted dots
+        overlay = img_cv.copy()
+        
+        # Create a color mask for highlighting
+        highlight_mask = np.zeros_like(img_cv)
+        # Find dots in the final mask (black = dot on white background)
+        dot_pixels = np.where(final_mask == 0)
+        highlight_mask[dot_pixels] = [0, 255, 0]  # Green highlight
+        
+        # Blend overlay
+        overlay = cv2.addWeighted(img_cv, 0.7, highlight_mask, 0.3, 0)
+        
+        # Convert results to PIL
+        mask_pil = PILImage.fromarray(final_mask)
+        overlay_pil = PILImage.fromarray(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB))
+        magnitude_pil = PILImage.fromarray(magnitude)
+        suppressed_pil = PILImage.fromarray(suppressed)
+        binary_pil = PILImage.fromarray(binary)
+        closed_pil = PILImage.fromarray(closed)
+        
+        return {
+            'mask': mask_pil,           # White background with black dots
+            'overlay': overlay_pil,     # Original with green highlighted dots
+            'magnitude': magnitude_pil,
+            'suppressed': suppressed_pil,
+            'binary': binary_pil,
+            'closed': closed_pil,
+            'dot_count': dot_count,
+            'success': True
+        }
+        
+    except Exception as e:
+        print(f"Algorithm 1 error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+
+
+class Algorithm1ViewSet(viewsets.ViewSet):
+    """
+    Algorithm 1: First-Order Spatial Derivative Shadow Gradient Filtering.
+    Traditional image-processing approach for Braille enhancement (no ML).
+    """
+
+    @action(detail=False, methods=['POST'])
+    def process(self, request):
+        try:
+            uploaded_file = request.FILES.get('image')
+            if not uploaded_file:
+                return Response({
+                    'status': 'error',
+                    'message': 'No image provided'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+            kernel_size = int(request.data.get('kernel_size', 3))
+            if kernel_size % 2 == 0:
+                kernel_size += 1
+
+            img = PILImage.open(uploaded_file).convert('RGB')
+
+            # Stage 1: background leveling / illumination compensation
+            gray_for_leveling = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
+            h, w = gray_for_leveling.shape
+            level_ksize = max(3, (min(h, w) // 8) | 1)  # scale to image size, force odd
+            leveled = level_background(gray_for_leveling, blur_ksize=level_ksize)
+            leveled_pil = PILImage.fromarray(leveled)
+
+            # Stage 2+: run Algorithm 1 on the leveled image, not the raw capture
+            result = process_braille_image(leveled_pil, kernel_size=kernel_size)
+
+            def to_b64(arr_or_pil, colormap=None):
+                if isinstance(arr_or_pil, np.ndarray):
+                    if colormap is not None:
+                        colored = cv2.applyColorMap(arr_or_pil.astype(np.uint8), colormap)
+                        arr_or_pil = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
+                    pil_img = PILImage.fromarray(arr_or_pil)
+                else:
+                    pil_img = arr_or_pil
+                buf = io.BytesIO()
+                pil_img.save(buf, format='JPEG', quality=95)
+                return base64.b64encode(buf.getvalue()).decode('utf-8')
+
+            response_data = {
+                'status': 'success',
+                'preprocessed_image': to_b64(leveled),  # ← new: Stage 1 relief-shaded output
+                'filtered_image': to_b64(result['mask']),
+                'overlay': to_b64(cv2.cvtColor(result['overlay'], cv2.COLOR_BGR2RGB)),
+                'magnitude': to_b64(result['magnitude'], colormap=cv2.COLORMAP_JET),
+                'dot_count': result['dot_count'],
+                'message': f"Algorithm 1 completed. Found {result['dot_count']} Braille dots.",
+            }
+
+            if str(request.data.get('include_debug', '')).lower() in ('1', 'true'):
+                orientation_deg = np.degrees(result['orientation'])
+                orientation_norm = cv2.normalize(orientation_deg, None, 0, 255, cv2.NORM_MINMAX)
+                response_data['debug'] = {
+                    'grayscale': to_b64(result['grayscale']),
+                    'gradient_x': to_b64(cv2.normalize(result['Gx'], None, 0, 255, cv2.NORM_MINMAX)),
+                    'gradient_y': to_b64(cv2.normalize(result['Gy'], None, 0, 255, cv2.NORM_MINMAX)),
+                    'orientation': to_b64(orientation_norm, colormap=cv2.COLORMAP_JET),
+                    'background': to_b64(result['background']),
+                    'suppressed': to_b64(result['suppressed']),
+                }
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print(f"Algorithm 1 API error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return Response({
+                'status': 'error',
+            'message': str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 class ImageViewSet(viewsets.ViewSet):
     """
     Handle all Image operations
@@ -337,7 +565,6 @@ class ImageViewSet(viewsets.ViewSet):
                 'errors': str(e)
             }, status=status.HTTP_400_BAD_REQUEST)
         
-        
     @action(detail=False, methods=['POST'])
     def dewarp(self, request):
         try:
@@ -361,14 +588,11 @@ class ImageViewSet(viewsets.ViewSet):
             
             # Step 3: Enhance contrast (reduced from 2.0 to 1.2)
             enhancer = ImageEnhance.Contrast(img)
-            img = enhancer.enhance(1.2)  # Lower contrast to keep details
+            img = enhancer.enhance(1.2)
             
             # Step 4: Enhance brightness (reduced from 1.5 to 1.1)
             enhancer = ImageEnhance.Brightness(img)
-            img = enhancer.enhance(1.1)  # Lower brightness to avoid washing out
-            
-            # Step 5: Apply slight sharpening (optional - can be removed)
-            # img = img.filter(ImageFilter.SHARPEN)
+            img = enhancer.enhance(1.1)
             
             # Save to bytes with good quality
             img_byte_arr = io.BytesIO()
@@ -391,7 +615,6 @@ class ImageViewSet(viewsets.ViewSet):
                 'status': 'error',
                 'message': str(e)
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
         
     # PUT /images/{id}/ - Full update image
     def update(self, request, pk=None):

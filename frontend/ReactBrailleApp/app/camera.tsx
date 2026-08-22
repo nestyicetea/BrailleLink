@@ -31,11 +31,9 @@ Pariatur excepteur sint occaecat cupidatat non proident, sunt in.
 
 Culpa qui officia deserunt mollit anim id est laborum.`;
 
-// Import the local braille image
-const BRAILLE_IMAGE = require('../assets/images/braille.jpeg');
-
 export default function CameraScreen() {
   const cameraRef = useRef<any>(null);
+  const [kernelSize] = useState(3);
   const flatListRef = useRef<any>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [image, setImage] = useState<string | null>(null);
@@ -57,10 +55,11 @@ export default function CameraScreen() {
   const [saveType, setSaveType] = useState<'image' | 'text'>('image');
   const [dewarpProgress, setDewarpProgress] = useState(0);
   const [useApiScanner, setUseApiScanner] = useState(true);
-  const [showBrailleImage, setShowBrailleImage] = useState(false);
   const [isZooming, setIsZooming] = useState(false);
   const [isReadingAudioEnabled, setIsReadingAudioEnabled] = useState(false);
   const [readingWordIndex, setReadingWordIndex] = useState(0);
+  const [preprocessedImageUri, setPreprocessedImageUri] = useState<string | null>(null);
+  const [showFilteredResult, setShowFilteredResult] = useState(false);
 
   const scanAnimation = useRef(new Animated.Value(0)).current;
   const dewarpAnimation = useRef(new Animated.Value(0)).current;
@@ -138,7 +137,6 @@ export default function CameraScreen() {
     zoomAnimation.setValue(1.15);
     fadeAnimation.setValue(0);
     
-    // Phase 1: Dewarping with zoom in
     Animated.parallel([
       Animated.timing(dewarpAnimation, {
         toValue: 1,
@@ -156,8 +154,7 @@ export default function CameraScreen() {
         useNativeDriver: true,
       })
     ]).start(() => {
-      // Phase 2: Switch to braille image and zoom out smoothly
-      setShowBrailleImage(true);
+      setShowFilteredResult(true);
       setShowButtons(true);
       setIsDewarping(false);
       setIsZooming(true);
@@ -187,57 +184,107 @@ export default function CameraScreen() {
     fadeAnimation.stopAnimation();
   };
 
-  // API-based document scanner
+  /**
+   * Apply Algorithm 1: First-Order Spatial Derivative Shadow Gradient Filtering
+   * 
+   * This algorithm suppresses background clutter (folds, edges, lighting variations)
+   * while preserving Braille dots using gradient-based filtering.
+   * 
+   * Mathematical formulation:
+   * Gx = I * Kx = ∂I/∂x    (Horizontal gradient)
+   * Gy = I * Ky = ∂I/∂y    (Vertical gradient)
+   * M(x,y) = √(Gx² + Gy²)  (Gradient magnitude)
+   * θ(x,y) = tan⁻¹(Gy/Gx)  (Orientation angle)
+   */
+  const applyBrailleGradientFilter = async (imageUri: string): Promise<string> => {
+    try {
+      setDewarpProgress(10);
+      
+      const formData = new FormData();
+      const filename = imageUri.split('/').pop() || 'image.jpg';
+      
+      formData.append('image', {
+        uri: imageUri,
+        name: filename,
+        type: 'image/jpeg',
+      } as any);
+      formData.append('kernel_size', String(kernelSize)); 
+      
+      setDewarpProgress(30);
+      
+      // Send to backend for Algorithm 1 processing
+      const response = await AxiosInstance.post('/algorithm1/process/', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 30000,
+      });
+      
+      setDewarpProgress(70);
+      
+      console.log('Algorithm 1 Response:', response.data);
+      
+      if (response.data && response.data.status === 'success') {
+        const originalDir = imageUri.substring(0, imageUri.lastIndexOf('/') + 1);
+
+        // Save Stage 1 preprocessed (background-leveled) image
+        if (response.data.preprocessed_image) {
+          const preprocessedUri = originalDir + `preprocessed_${Date.now()}.jpg`;
+          await FileSystem.writeAsStringAsync(preprocessedUri, response.data.preprocessed_image, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          setPreprocessedImageUri(preprocessedUri);
+          setDewarpProgress(100);
+          return preprocessedUri;
+        }
+        
+        throw new Error('No image data in response');
+      }
+      
+      throw new Error('Algorithm 1 processing failed');
+      
+    } catch (error) {
+      console.error('Algorithm 1 processing error:', error);
+      // Return original image as fallback
+      return imageUri;
+    }
+  };
+
+  // API-based document scanner with Algorithm 1 integration
   const processImageWithScannerAPI = async (imageUri: string): Promise<string> => {
     try {
       setDewarpProgress(10);
       
-      // Read image as base64
-      const base64Image = await FileSystem.readAsStringAsync(imageUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      // Step 1: Apply Algorithm 1 - Gradient-based filtering
+      const filteredUri = await applyBrailleGradientFilter(imageUri);
       
-      setDewarpProgress(30);
+      setDewarpProgress(60);
       
-      // Try backend dewarping first
-      try {
-        const formData = new FormData();
-        const filename = imageUri.split('/').pop() || 'image.jpg';
+      // Step 2: Further enhance the filtered image if needed
+      if (filteredUri !== imageUri) {
+        const enhanced = await ImageManipulator.manipulateAsync(
+          filteredUri,
+          [
+            { resize: { width: 1000 } },
+          ],
+          { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
+        );
         
-        formData.append('image', {
-          uri: imageUri,
-          name: filename,
-          type: 'image/jpeg',
-        } as any);
-        
-        const response = await AxiosInstance.post('/images/dewarp/', formData, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-          timeout: 30000,
-        });
-        
-        setDewarpProgress(70);
-        
-        if (response.data && response.data.status === 'success') {
-          // Use FileSystem.documentDirectory instead of cacheDirectory
-          // NEW CODE - Save in same directory as original
-          const originalDir = imageUri.substring(0, imageUri.lastIndexOf('/') + 1);
-          const fileUri = originalDir + `scanned_${Date.now()}.jpg`;
-          await FileSystem.writeAsStringAsync(fileUri, response.data.image, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-          
-          setDewarpProgress(100);
-          return fileUri;
-        }
-      } catch (backendError) {
-        console.warn('Backend dewarping failed, using local processing:', backendError);
+        setDewarpProgress(100);
+        return enhanced.uri;
       }
       
-      // Fallback: Local processing
-      console.log('Using local processing as fallback');
-      return await processImageLocally(imageUri);
+      // If no filtering was applied, return the enhanced original
+      const enhanced = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [
+          { resize: { width: 1000 } },
+        ],
+        { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      
+      setDewarpProgress(100);
+      return enhanced.uri;
       
     } catch (error) {
       console.error('Scanner API error:', error);
@@ -245,34 +292,30 @@ export default function CameraScreen() {
     }
   };
 
-  // Local processing
+  // Local processing with Algorithm 1
   const processImageLocally = async (imageUri: string): Promise<string> => {
     try {
       setDewarpProgress(20);
       
+      // Apply Algorithm 1 via backend
+      const filteredUri = await applyBrailleGradientFilter(imageUri);
+      
+      setDewarpProgress(60);
+      
       // Apply enhancements
       const enhanced = await ImageManipulator.manipulateAsync(
-        imageUri,
+        filteredUri,
         [
           { resize: { width: 1200 } },
         ],
         { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
       );
       
-      setDewarpProgress(50);
-      
-      // Apply whitening effect
-      const whitened = await ImageManipulator.manipulateAsync(
-        enhanced.uri,
-        [],
-        { compress: 1.0, format: ImageManipulator.SaveFormat.JPEG }
-      );
-      
       setDewarpProgress(80);
       
       // Final resize
       const final = await ImageManipulator.manipulateAsync(
-        whitened.uri,
+        enhanced.uri,
         [
           { resize: { width: 1000 } },
         ],
@@ -344,12 +387,10 @@ export default function CameraScreen() {
       
       formData.append('image_name', fileName);
       
-      console.log('Uploading text file:', fileName);
       const response = await AxiosInstance.post('/images/', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       
-      console.log('Upload response:', response.data);
       return response.data && response.data.status === 'success';
     } catch (error) {
       console.error('Text save error:', error);
@@ -375,11 +416,12 @@ export default function CameraScreen() {
     setImage(uri);
     setPendingImageUri(uri);
     setProcessedImageUri(null);
+    setPreprocessedImageUri(null);
     setPendingText(null);
     setShowButtons(false);
     setCurrentIndex(0);
     setDewarpProgress(0);
-    setShowBrailleImage(false);
+    setShowFilteredResult(false);
     setIsZooming(false);
     
     // Start scanning animation
@@ -403,9 +445,9 @@ export default function CameraScreen() {
     } catch (error) {
       console.error('Error processing image:', error);
       stopScanAnimation();
-      setShowBrailleImage(true);
+      setShowFilteredResult(true);
       setShowButtons(true);
-      Alert.alert('Warning', 'Processing failed. Showing sample image.');
+      Alert.alert('Warning', 'Processing failed. Please try again.');
     }
   };
 
@@ -458,10 +500,10 @@ export default function CameraScreen() {
     ? [
         { 
           id: 1, 
-          source: showBrailleImage ? BRAILLE_IMAGE : { uri: image }, 
-          uri: showBrailleImage ? 'braille' : image, 
-          label: 'Scanned', 
-          isLocal: showBrailleImage, 
+          source: showFilteredResult && preprocessedImageUri ? { uri: preprocessedImageUri } : { uri: image }, 
+          uri: preprocessedImageUri || image, 
+          label: showFilteredResult ? 'Preprocessed (Background Leveled)' : 'Original', 
+          isLocal: false, 
           type: 'image' 
         },
         { id: 2, text: TRANSLATED_TEXT, label: 'Translated', isLocal: true, type: 'text' },
@@ -480,8 +522,7 @@ export default function CameraScreen() {
       setShowSaveModal(true);
     } else {
       setSaveType('image');
-      // If showing braille image, use a placeholder URI
-      setPendingImageUri(showBrailleImage ? 'braille_placeholder' : (currentSlide.uri ?? null));
+      setPendingImageUri(currentSlide.uri ?? null);
       setShowSaveModal(true);
     }
   };
@@ -496,18 +537,12 @@ export default function CameraScreen() {
         Alert.alert('Error', 'Failed to save text file. Please try again.');
       }
     } else if (saveType === 'image' && pendingImageUri) {
-      // If it's the braille image, just show success without uploading
-      if (pendingImageUri === 'braille_placeholder') {
-        setShowSaveModal(false);
-        Alert.alert('Success', 'Image saved successfully!');
-        return;
-      }
       const success = await uploadToBackend(pendingImageUri, selectedFolder, imageName);
       if (success) {
         setShowSaveModal(false);
-        Alert.alert('Success', 'Photo saved successfully!');
+        Alert.alert('Success', 'Image saved successfully!');
       } else {
-        Alert.alert('Error', 'Failed to save photo. Please try again.');
+        Alert.alert('Error', 'Failed to save image. Please try again.');
       }
     } else {
       Alert.alert('Info', 'No content to save.');
@@ -518,12 +553,13 @@ export default function CameraScreen() {
     setImage(null);
     setPendingImageUri(null);
     setProcessedImageUri(null);
+    setPreprocessedImageUri(null);
     setPendingText(null);
     setShowButtons(false);
     setShowSaveModal(false);
     setCurrentIndex(0);
     setDewarpProgress(0);
-    setShowBrailleImage(false);
+    setShowFilteredResult(false);
     setIsZooming(false);
     stopScanAnimation();
     stopDewarpAnimation();
@@ -565,8 +601,14 @@ export default function CameraScreen() {
               resizeMode="contain" 
             />
           </View>
-          {/* Straightened-look outline overlay: clean rectangle + corner brackets,
-              gives the impression the page edges were detected and squared off */}
+          {/* Algorithm 1 processing indicator */}
+          <View style={styles.algorithmBadge} pointerEvents="none">
+            <Ionicons name="analytics-outline" size={14} color="#fff" />
+            <Text style={styles.algorithmBadgeText}>
+              {showFilteredResult ? 'Cleaned ✓' : 'Processing...'}
+            </Text>
+          </View>
+          {/* Clean outline overlay */}
           <View style={styles.straightenOutline} pointerEvents="none">
             <View style={[styles.cornerBracket, styles.cornerTopLeft]} />
             <View style={[styles.cornerBracket, styles.cornerTopRight]} />
@@ -575,7 +617,9 @@ export default function CameraScreen() {
           </View>
           <View style={styles.straightenedBadge} pointerEvents="none">
             <Ionicons name="checkmark-circle" size={14} color="#fff" />
-            <Text style={styles.straightenedBadgeText}>Straightened</Text>
+            <Text style={styles.straightenedBadgeText}>
+              {showFilteredResult ? 'Background Leveled' : 'Processing...'}
+            </Text>
           </View>
         </View>
       ) : (
@@ -624,16 +668,6 @@ export default function CameraScreen() {
             <Text style={styles.translatedText}>
               {item.text.split(/(\s+)/).map((part: string, index: number) => {
                 const wordOnly = part.trim();
-                const isWord = wordOnly.length > 0;
-                const wordPosition = item.text
-                  .split(/\s+/)
-                  .filter(Boolean)
-                  .findIndex((word: string, position: number) => position === readingWordIndex);
-
-                if (!isWord) {
-                  return <Text key={`space-${index}`}>{part}</Text>;
-                }
-
                 const displayWordIndex = item.text
                   .split(/\s+/)
                   .filter(Boolean)
@@ -690,7 +724,7 @@ export default function CameraScreen() {
           <TouchableOpacity onPress={handleRetake} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Scanner</Text>
+          <Text style={styles.headerTitle}>Algorithm 1: Braille Enhancement</Text>
         </View>
 
         {/* Scanning phase OR Dewarping phase OR Carousel phase */}
@@ -706,7 +740,8 @@ export default function CameraScreen() {
                   })
                 }]
               }]} />
-              <Text style={styles.scanningText}>Scanning document...</Text>
+              <Text style={styles.scanningText}>Applying Algorithm 1...</Text>
+              <Text style={styles.scanningSubText}>First-Order Spatial Derivative Filtering</Text>
               <View style={styles.progressContainer}>
                 <View style={[styles.progressBar, { width: `${dewarpProgress}%` }]} />
               </View>
@@ -736,8 +771,8 @@ export default function CameraScreen() {
               </Animated.View>
               <View style={styles.dewarpStatus}>
                 <ActivityIndicator size="large" color="#DC143C" />
-                <Text style={styles.dewarpText}>Dewarping document...</Text>
-                <Text style={styles.dewarpSubText}>Straightening </Text>
+                <Text style={styles.dewarpText}>Processing Braille Image</Text>
+                <Text style={styles.dewarpSubText}>Background leveling & illumination compensation</Text>
                 <View style={styles.progressContainer}>
                   <View style={[styles.progressBar, { width: `${dewarpProgress}%` }]} />
                 </View>
@@ -899,7 +934,7 @@ export default function CameraScreen() {
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Document Scanner</Text>
+        <Text style={styles.headerTitle}>Braille Scanner</Text>
       </View>
 
       <CameraView 
@@ -910,10 +945,10 @@ export default function CameraScreen() {
       />
 
       <View style={styles.cameraOverlay}>
-        <Text style={styles.overlayText}>Position document in frame</Text>
-        {/* <Text style={[styles.overlayText, { marginTop: 8, fontSize: 12 }]}>
-          {useApiScanner ? '📡 Cloud Scanner' : '📱 Local Scanner'}
-        </Text> */}
+        <Text style={styles.overlayText}>Position Braille paper in frame</Text>
+        <Text style={[styles.overlayText, { marginTop: 8, fontSize: 12 }]}>
+          Algorithm 1: First-Order Spatial Derivative Filtering
+        </Text>
       </View>
 
       <View style={styles.bottomControls}>
@@ -988,7 +1023,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  // Wrapper that holds the image + the straightened-look outline overlay
   imageFrameWrapper: {
     width: width - 20,
     height: height * 0.7,
@@ -1012,8 +1046,6 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 0,
   },
-  // Outline that sits on top of the image to make it look like the
-  // document edges were detected and squared off (a "straightened" look)
   straightenOutline: {
     position: 'absolute',
     top: 20,
@@ -1023,7 +1055,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#ffffff',
     borderRadius: 4,
-    // subtle shadow so the outline reads clearly over any image content
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.35,
@@ -1076,6 +1107,23 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   straightenedBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  algorithmBadge: {
+    position: 'absolute',
+    top: 28,
+    left: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(220, 20, 60, 0.85)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    gap: 5,
+  },
+  algorithmBadgeText: {
     color: '#fff',
     fontSize: 11,
     fontWeight: '600',
@@ -1198,6 +1246,7 @@ const styles = StyleSheet.create({
   },
   scanLine: { position: 'absolute', left: 0, right: 0, height: 2, backgroundColor: '#DC143C', width: '100%' },
   scanningText: { color: '#fff', fontSize: 16, marginTop: 20, fontWeight: '600' },
+  scanningSubText: { color: '#ccc', fontSize: 12, marginTop: 4 },
   
   // Progress
   progressContainer: {

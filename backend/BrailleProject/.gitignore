@@ -1,2 +1,100 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+pythonenv*
+
+# Django
+*.log
+*.pot
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+/media/
+/static/
+/staticfiles/
+/collectstatic/
+
 # Environment variables
 .env
+.env.local
+.env.production
+.env.development
+.env.test
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.iml
+
+# Virtual Environment
+lib/
+lib64/
+pyvenv.cfg
+pip-selfcheck.json
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+# Uploads
+/media/images/*
+!/media/images/.gitkeep
+/media/uploads/*
+!/media/uploads/.gitkeep
+
+# Migration files (optional - uncomment if you want to ignore migrations)
+# */migrations/*.py
+# !*/migrations/__init__.py
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+
+# pyenv
+.python-version
+
+# Backup files
+*.bak
+*.backup
+*.tmp
+
+# Node modules (if using npm for frontend)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Logs
+logs/
+*.log
+
+# Secret files
+secret_key.txt
+*.pem
+*.key
+*.crt
+
+# HTML files (optional - ignore all HTML except important ones)
+# *.html
+# !index.html
+# !base.html
+
+# __init__.py - DO NOT IGNORE these!
+# __init__.py is required for Python packages
