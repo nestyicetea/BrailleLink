@@ -1,8 +1,11 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Dimensions, Image, Alert, Modal, TextInput } from 'react-native';
-import { useState, useCallback, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Dimensions, Image, Alert, Modal, TextInput, ActivityIndicator } from 'react-native';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AxiosInstance from '../axios';
+import * as Speech from 'expo-speech';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
 const { width, height } = Dimensions.get('window');
 const COLUMN_WIDTH = (width - 48) / 3;
@@ -17,6 +20,7 @@ interface ImageItem {
   updated_at: string;
   is_text?: boolean;
   text_content?: string;
+  output_text?: string;
 }
 
 export default function ViewFolderScreen() {
@@ -33,9 +37,46 @@ export default function ViewFolderScreen() {
   const [renamingItem, setRenamingItem] = useState<ImageItem | null>(null);
   const [newItemName, setNewItemName] = useState('');
   const [isTextViewModal, setIsTextViewModal] = useState(false);
+  const [showCombinedOutputModal, setShowCombinedOutputModal] = useState(false);
+  const [isCombinedSpeechEnabled, setIsCombinedSpeechEnabled] = useState(false);
+  const [filipinoVoice, setFilipinoVoice] = useState<Speech.Voice | null>(null);
+  const [showCombinedPhotos, setShowCombinedPhotos] = useState(true);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [combinedOutputScope, setCombinedOutputScope] = useState<'all' | 'selected'>('all');
+  const speechResumeIndex = useRef(0);
+  const speechSession = useRef(0);
+
+  const stopCombinedSpeech = () => {
+    speechSession.current += 1;
+    Speech.stop();
+  };
 
   useEffect(() => {
     loadFolderContents();
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    Speech.getAvailableVoicesAsync().then((voices) => {
+      const matchingVoices = voices
+        .filter((voice) => {
+          const language = voice.language.toLowerCase();
+          return language.startsWith('fil') || language.startsWith('tl');
+        })
+        .sort((firstVoice, secondVoice) => {
+          return Number(secondVoice.quality === Speech.VoiceQuality.Enhanced)
+            - Number(firstVoice.quality === Speech.VoiceQuality.Enhanced);
+        });
+
+      if (isMounted) setFilipinoVoice(matchingVoices[0] ?? null);
+    }).catch((error) => {
+      console.warn('Unable to load Filipino speech voices:', error);
+    });
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const loadFolderContents = async () => {
@@ -144,7 +185,7 @@ export default function ViewFolderScreen() {
   };
 
   const handleCopySelected = async () => {
-    Alert.alert('Copy', 'Copy feature coming soon!');
+    openCombinedOutputs('selected');
   };
 
   const handleRenameItem = async () => {
@@ -176,6 +217,160 @@ export default function ViewFolderScreen() {
     const date = new Date(dateString);
     return date.toLocaleDateString();
   };
+
+  const folderOutputItems = images.filter((item) => item.output_text);
+  const combinedOutputItems = images
+    .filter((item) => item.output_text && (
+      combinedOutputScope === 'all' || selectedImages.includes(item.image_id)
+    ));
+  const combinedOutputText = combinedOutputItems
+    .map((item) => item.output_text)
+    .join('\n\n');
+
+  const openCombinedOutputs = (scope: 'all' | 'selected') => {
+    const outputItems = images.filter((item) => item.output_text && (
+      scope === 'all' || selectedImages.includes(item.image_id)
+    ));
+
+    if (outputItems.length === 0) {
+      Alert.alert('No outputs', 'The selected photos do not have text outputs.');
+      return;
+    }
+
+    setCombinedOutputScope(scope);
+    setShowCombinedOutputModal(true);
+  };
+
+  const escapeHtml = (value: string) => value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+  const exportCombinedPdf = async (
+    scope: 'all' | 'selected' = combinedOutputScope,
+    includePhotos = showCombinedPhotos,
+  ) => {
+    const outputItems = images.filter((item) => item.output_text && (
+      scope === 'all' || selectedImages.includes(item.image_id)
+    ));
+
+    if (outputItems.length === 0) {
+      Alert.alert('No outputs', 'The selected photos do not have text outputs.');
+      return;
+    }
+
+    setIsExportingPdf(true);
+    try {
+      const title = escapeHtml(String(folderName || 'Folder'));
+      const outputSections = outputItems.map((item) => `
+        <section class="output">
+          ${includePhotos && item.image_url
+            ? `<img src="${escapeHtml(item.image_url)}" class="photo" />`
+            : ''}
+          <p>${escapeHtml(item.output_text || '')}</p>
+        </section>
+      `).join('');
+      const html = `
+        <html>
+          <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <style>
+              body { font-family: sans-serif; color: #1A1A1A; padding: 24px; }
+              h1 { color: #DC143C; font-size: 24px; margin-bottom: 24px; }
+              h2 { font-size: 16px; color: #DC143C; margin: 12px 0 8px; }
+              p { font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+              .output { page-break-inside: avoid; border-bottom: 1px solid #E5E5EA; padding-bottom: 20px; margin-bottom: 20px; }
+              .photo { display: block; width: 100%; max-height: 360px; object-fit: contain; margin-bottom: 12px; }
+            </style>
+          </head>
+          <body><h1>${title}</h1>${outputSections}</body>
+        </html>
+      `;
+      const { uri } = await Print.printToFileAsync({ html });
+      const canShare = await Sharing.isAvailableAsync();
+
+      if (!canShare) {
+        Alert.alert('PDF created', 'The PDF was created, but sharing is unavailable on this device.');
+        return;
+      }
+
+      await Sharing.shareAsync(uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: `Save ${String(folderName || 'folder')} PDF`,
+        UTI: 'com.adobe.pdf',
+      });
+    } catch (error) {
+      console.error('PDF export error:', error);
+      Alert.alert('Error', 'Failed to create the PDF. Please try again.');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!showCombinedOutputModal || !isCombinedSpeechEnabled || !combinedOutputText) {
+      stopCombinedSpeech();
+      return;
+    }
+
+    stopCombinedSpeech();
+    const currentSession = speechSession.current;
+    const resumeStart = Math.min(speechResumeIndex.current, combinedOutputText.length);
+    const remainingText = combinedOutputText.slice(resumeStart);
+    const speechChunks: { text: string; start: number }[] = [];
+    let currentChunk = '';
+    let currentChunkStart = 0;
+    let remainingOffset = 0;
+
+    remainingText.split(/\s+/).forEach((word) => {
+      if ((currentChunk + ' ' + word).trim().length > 3500) {
+        speechChunks.push({ text: currentChunk.trim(), start: currentChunkStart });
+        currentChunkStart = remainingOffset;
+        currentChunk = word;
+      } else {
+        currentChunk = `${currentChunk} ${word}`;
+      }
+      remainingOffset += word.length + 1;
+    });
+    if (currentChunk.trim()) speechChunks.push({ text: currentChunk.trim(), start: currentChunkStart });
+
+    let isCancelled = false;
+    const speakChunk = (chunkIndex: number) => {
+      if (isCancelled || currentSession !== speechSession.current || chunkIndex >= speechChunks.length) return;
+
+      const chunk = speechChunks[chunkIndex];
+      Speech.speak(chunk.text, {
+        language: filipinoVoice?.language ?? 'fil-PH',
+        voice: filipinoVoice?.identifier,
+        rate: 0.9,
+        pitch: 1,
+        onDone: () => {
+          if (currentSession !== speechSession.current) return;
+          if (chunkIndex === speechChunks.length - 1) {
+            speechResumeIndex.current = 0;
+          } else {
+            speakChunk(chunkIndex + 1);
+          }
+        },
+      });
+    };
+
+    const startSpeech = async () => {
+      await Speech.stop();
+      if (!isCancelled && currentSession === speechSession.current) {
+        speakChunk(0);
+      }
+    };
+
+    startSpeech();
+
+    return () => {
+      isCancelled = true;
+      stopCombinedSpeech();
+    };
+  }, [isCombinedSpeechEnabled, combinedOutputText, showCombinedOutputModal, filipinoVoice]);
 
   const renderItem = (item: ImageItem) => {
     const isSelected = selectedImages.includes(item.image_id);
@@ -217,9 +412,14 @@ export default function ViewFolderScreen() {
           </Text>
         </TouchableOpacity>
         <Text style={styles.itemDate}>{formatDate(item.created_at)}</Text>
-        {item.is_text && (
+        {item.is_text && !item.output_text && (
           <View style={styles.fileTypeBadge}>
             <Text style={styles.fileTypeText}>TXT</Text>
+          </View>
+        )}
+        {item.output_text && (
+          <View style={styles.fileTypeBadge}>
+            <Text style={styles.fileTypeText}>PHOTO + TXT</Text>
           </View>
         )}
       </TouchableOpacity>
@@ -277,7 +477,19 @@ export default function ViewFolderScreen() {
             <Text style={styles.statsText}>{selectedImages.length} selected</Text>
             <View style={styles.selectionButtons}>
               <TouchableOpacity onPress={handleCopySelected} style={styles.selectionActionBtn}>
-                <Ionicons name="copy-outline" size={20} color="#DC143C" />
+                <Ionicons name="albums-outline" size={20} color="#DC143C" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => exportCombinedPdf('selected', true)}
+                style={styles.selectionActionBtn}
+                accessibilityLabel="Save selected outputs as PDF"
+                disabled={isExportingPdf}
+              >
+                {isExportingPdf ? (
+                  <ActivityIndicator size="small" color="#DC143C" />
+                ) : (
+                  <Ionicons name="document-text-outline" size={20} color="#DC143C" />
+                )}
               </TouchableOpacity>
               <TouchableOpacity onPress={handleDeleteSelected} style={styles.selectionActionBtn}>
                 <Ionicons name="trash-outline" size={20} color="#DC143C" />
@@ -288,6 +500,15 @@ export default function ViewFolderScreen() {
           <>
             <Text style={styles.statsText}>{images.length} items</Text>
             <Text style={styles.statsDate}>Created: {formatDate(folderInfo?.created_at)}</Text>
+            {folderOutputItems.length > 0 ? (
+              <TouchableOpacity
+                style={styles.allOutputsButton}
+                onPress={() => openCombinedOutputs('all')}
+                accessibilityLabel="View all outputs"
+              >
+                <Ionicons name="albums-outline" size={18} color="#DC143C" />
+              </TouchableOpacity>
+            ) : null}
           </>
         )}
       </View>
@@ -354,14 +575,135 @@ export default function ViewFolderScreen() {
               </View>
             ) : selectedItem?.image_url && !selectedItem.is_text ? (
               // Full screen image view
-              <View style={styles.fullScreenImageView}>
-                <Image 
-                  source={{ uri: selectedItem.image_url }} 
-                  style={styles.fullScreenImage} 
-                  resizeMode="contain" 
-                />
-              </View>
+              selectedItem.output_text ? (
+                <View style={styles.twinContentView}>
+                  <Image
+                    source={{ uri: selectedItem.image_url }}
+                    style={styles.twinImage}
+                    resizeMode="contain"
+                  />
+                  <ScrollView
+                    style={styles.attachedOutputScroll}
+                    contentContainerStyle={styles.attachedOutputContainer}
+                    showsVerticalScrollIndicator={true}
+                    indicatorStyle="black"
+                  >
+                    <Text style={styles.attachedOutputLabel}>Text output</Text>
+                    <Text style={styles.fullScreenText}>{selectedItem.output_text}</Text>
+                  </ScrollView>
+                </View>
+              ) : (
+                <ScrollView
+                  style={styles.fullScreenImageView}
+                  contentContainerStyle={styles.fullScreenImageContent}
+                >
+                  <Image
+                    source={{ uri: selectedItem.image_url }}
+                    style={styles.fullScreenImage}
+                    resizeMode="contain"
+                  />
+                </ScrollView>
+              )
             ) : null}
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showCombinedOutputModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          stopCombinedSpeech();
+          setIsCombinedSpeechEnabled(false);
+          setShowCombinedOutputModal(false);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.combinedOutputModalContent}>
+            <View style={styles.combinedOutputHeader}>
+              <TouchableOpacity
+                onPress={() => {
+                  stopCombinedSpeech();
+                  setIsCombinedSpeechEnabled(false);
+                  setShowCombinedOutputModal(false);
+                }}
+                style={styles.combinedOutputBackButton}
+                accessibilityLabel="Back to folder"
+              >
+                <Ionicons name="chevron-back" size={28} color="#1A1A1A" />
+              </TouchableOpacity>
+              <Text style={styles.combinedOutputTitle}>{folderName || 'Folder'}</Text>
+              <View style={styles.combinedOptionsRow}>
+                <TouchableOpacity
+                  onPress={() => {
+                    if (isCombinedSpeechEnabled) stopCombinedSpeech();
+                    setIsCombinedSpeechEnabled((enabled) => !enabled);
+                  }}
+                  style={styles.combinedIconToggle}
+                  accessibilityLabel={isCombinedSpeechEnabled ? 'Pause speech' : 'Play speech'}
+                >
+                  <Ionicons
+                    name={isCombinedSpeechEnabled ? 'pause' : 'play'}
+                    size={21}
+                    color={isCombinedSpeechEnabled ? '#DC143C' : '#8E8E93'}
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setShowCombinedPhotos((visible) => !visible)}
+                  style={styles.combinedIconToggle}
+                  accessibilityLabel={showCombinedPhotos ? 'Hide photos' : 'Show photos'}
+                >
+                  <Ionicons
+                    name={showCombinedPhotos ? 'image' : 'image-outline'}
+                    size={21}
+                    color={showCombinedPhotos ? '#DC143C' : '#8E8E93'}
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => exportCombinedPdf()}
+                  style={styles.combinedIconToggle}
+                  accessibilityLabel="Save outputs as PDF"
+                  disabled={isExportingPdf}
+                >
+                  {isExportingPdf ? (
+                    <ActivityIndicator size="small" color="#DC143C" />
+                  ) : (
+                    <Ionicons name="document-text-outline" size={21} color="#DC143C" />
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+            <ScrollView
+              style={styles.combinedOutputScroll}
+              contentContainerStyle={styles.combinedOutputContent}
+              showsVerticalScrollIndicator
+              indicatorStyle="black"
+            >
+              {(() => {
+                let outputOffset = 0;
+
+                return combinedOutputItems.map((item) => {
+                  const outputText = item.output_text || '';
+                  outputOffset += outputText.length + 2;
+
+                  return (
+                    <View key={item.image_id} style={styles.combinedOutputItem}>
+                      {showCombinedPhotos && item.image_url ? (
+                        <Image
+                          source={{ uri: item.image_url }}
+                          style={styles.combinedOutputImage}
+                          resizeMode="contain"
+                        />
+                      ) : null}
+                      <Text style={styles.fullScreenText}>
+                        {outputText}
+                      </Text>
+                    </View>
+                  );
+                });
+              })()}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -467,6 +809,21 @@ const styles = StyleSheet.create({
   statsDate: {
     fontSize: 12,
     color: '#8E8E93',
+  },
+  allOutputsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#DC143C',
+    borderRadius: 8,
+  },
+  allOutputsButtonText: {
+    color: '#DC143C',
+    fontSize: 12,
+    fontWeight: '600',
   },
   selectionActions: {
     flexDirection: 'row',
@@ -636,14 +993,40 @@ const styles = StyleSheet.create({
   },
   fullScreenImageView: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
     paddingTop: 100,
     paddingBottom: 40,
+  },
+  fullScreenImageContent: {
+    alignItems: 'center',
+  },
+  twinContentView: {
+    flex: 1,
+    paddingTop: 100,
+    paddingBottom: 24,
+  },
+  twinImage: {
+    width: width,
+    height: height * 0.42,
+  },
+  attachedOutputScroll: {
+    flex: 1,
+    marginHorizontal: 24,
+    backgroundColor: '#F7F7F7',
+    borderRadius: 8,
   },
   fullScreenImage: {
     width: width,
     height: height * 0.8,
+  },
+  attachedOutputContainer: {
+    paddingHorizontal: 16,
+    padding: 16,
+  },
+  attachedOutputLabel: {
+    marginBottom: 8,
+    color: '#DC143C',
+    fontSize: 14,
+    fontWeight: '700',
   },
   fullScreenTextView: {
     flex: 1,
@@ -662,6 +1045,75 @@ const styles = StyleSheet.create({
     color: '#1A1A1A',
     fontFamily: 'monospace',
     lineHeight: 26,
+  },
+  speechWordActive: {
+    backgroundColor: 'rgba(220, 20, 60, 0.18)',
+    color: '#000',
+  },
+  combinedOutputModalContent: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    paddingTop: 24,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+  },
+  combinedOutputHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    marginBottom: 18,
+  },
+  combinedOutputBackButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    padding: 4,
+  },
+  combinedOutputTitle: {
+    flex: 1,
+    marginRight: 8,
+    color: '#1A1A1A',
+    fontSize: 18,
+    fontWeight: '600',
+    textAlign: 'right',
+  },
+  combinedOptionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
+  combinedIconToggle: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    borderRadius: 19,
+    backgroundColor: '#F7F7F7',
+  },
+  combinedOutputScroll: {
+    flex: 1,
+    backgroundColor: '#F7F7F7',
+    borderRadius: 8,
+  },
+  combinedOutputContent: {
+    padding: 16,
+  },
+  combinedOutputItem: {
+    marginBottom: 20,
+    paddingBottom: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
+  },
+  combinedOutputImage: {
+    width: '100%',
+    height: height * 0.28,
+    marginBottom: 10,
+    backgroundColor: '#FFFFFF',
   },
   renameModalContent: {
     backgroundColor: '#FFFFFF',

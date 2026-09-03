@@ -12,24 +12,19 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as Speech from 'expo-speech';
 
 const { width, height } = Dimensions.get('window');
 const DEFAULT_FOLDER_KEY = 'default_folder_id';
 
-// Simple notepad-style text sample
-const TRANSLATED_TEXT = `Lorem ipsum dolor sit amet, consectetur adipiscing elit.
+// Sample outputs shown until the translation model is connected.
+const SAMPLE_OUTPUTS = [
+  `Maagang dumating ang mga mag-aaral sa silid-aralan upang maghanda para sa kanilang bagong aralin. Ipinaliwanag ng guro na ang bawat pahina ay may mahalagang kuwento at kaalaman na maaaring matutuhan. Sa pamamagitan ng pakikinig at pagtutulungan, naging mas madali para sa lahat ang pag-unawa sa aralin.`,
+  `The students arrived early in the classroom and prepared their notebooks for a new lesson. Their teacher explained that every page can offer useful knowledge and encourage careful thinking. By listening to one another and working together, the class found that learning becomes easier and more enjoyable.`,
+  `Maagang pumasok ang mga estudyante para maghanda sa kanilang lesson. The teacher reminded them that every page can teach something useful, kaya mahalagang magbasa at mag-isip nang mabuti. Sa pamamagitan ng teamwork and sharing ideas, mas naging madali para sa buong klase ang pagkatuto.`,
+];
 
-Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
-
-Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.
-
-Nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in.
-
-Reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla.
-
-Pariatur excepteur sint occaecat cupidatat non proident, sunt in.
-
-Culpa qui officia deserunt mollit anim id est laborum.`;
+const getSampleOutput = (photoIndex: number) => SAMPLE_OUTPUTS[photoIndex % SAMPLE_OUTPUTS.length];
 
 export default function CameraScreen() {
   const cameraRef = useRef<any>(null);
@@ -37,11 +32,14 @@ export default function CameraScreen() {
   const flatListRef = useRef<any>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [image, setImage] = useState<string | null>(null);
+  const [batchImageUris, setBatchImageUris] = useState<string[]>([]);
+  const [batchProcessedImageUris, setBatchProcessedImageUris] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [folders, setFolders] = useState<any[]>([]);
   const [selectedFolder, setSelectedFolder] = useState<number | null>(null);
   const [defaultFolderId, setDefaultFolderId] = useState<number | null>(null);
   const [showSaveModal, setShowSaveModal] = useState(false);
+  const [showNewFolderInput, setShowNewFolderInput] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [imageName, setImageName] = useState('');
   const [isScanning, setIsScanning] = useState(false);
@@ -50,6 +48,8 @@ export default function CameraScreen() {
   const [pendingImageUri, setPendingImageUri] = useState<string | null>(null);
   const [processedImageUri, setProcessedImageUri] = useState<string | null>(null);
   const [pendingText, setPendingText] = useState<string | null>(null);
+  const [selectedPhotoIndices, setSelectedPhotoIndices] = useState<number[]>([]);
+  const [batchSaveMode, setBatchSaveMode] = useState<'all' | 'selected' | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [flashMode, setFlashMode] = useState<FlashMode>('off');
   const [saveType, setSaveType] = useState<'image' | 'text'>('image');
@@ -57,9 +57,10 @@ export default function CameraScreen() {
   const [useApiScanner, setUseApiScanner] = useState(true);
   const [isZooming, setIsZooming] = useState(false);
   const [isReadingAudioEnabled, setIsReadingAudioEnabled] = useState(false);
-  const [readingWordIndex, setReadingWordIndex] = useState(0);
+  const [filipinoVoice, setFilipinoVoice] = useState<Speech.Voice | null>(null);
   const [preprocessedImageUri, setPreprocessedImageUri] = useState<string | null>(null);
   const [showFilteredResult, setShowFilteredResult] = useState(false);
+
 
   const scanAnimation = useRef(new Animated.Value(0)).current;
   const dewarpAnimation = useRef(new Animated.Value(0)).current;
@@ -73,24 +74,51 @@ export default function CameraScreen() {
   }, []);
 
   useEffect(() => {
-    const activeSlide = slides[currentIndex];
-    const isTextSlideActive = activeSlide?.type === 'text';
+    let isMounted = true;
 
-    if (!isReadingAudioEnabled || !isTextSlideActive) {
-      setReadingWordIndex(0);
+    Speech.getAvailableVoicesAsync().then((voices) => {
+      const filipinoVoices = voices
+        .filter((voice) => {
+          const language = voice.language.toLowerCase();
+          return language.startsWith('fil') || language.startsWith('tl');
+        })
+        .sort((firstVoice, secondVoice) => {
+          return Number(secondVoice.quality === Speech.VoiceQuality.Enhanced)
+            - Number(firstVoice.quality === Speech.VoiceQuality.Enhanced);
+        });
+
+      if (isMounted) setFilipinoVoice(filipinoVoices[0] ?? null);
+    }).catch((error) => {
+      console.warn('Unable to load Filipino speech voices:', error);
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const isTextSlide = currentIndex % 2 === 1;
+    const photoIndex = Math.floor(currentIndex / 2);
+    const textToSpeak = isTextSlide ? getSampleOutput(photoIndex) : null;
+
+    if (!isReadingAudioEnabled || !textToSpeak) {
+      Speech.stop();
       return;
     }
 
-    const words = activeSlide.text?.split(/\s+/).filter(Boolean) ?? [];
-    if (words.length === 0) return;
+    Speech.stop();
+    Speech.speak(textToSpeak, {
+      language: filipinoVoice?.language ?? 'fil-PH',
+      voice: filipinoVoice?.identifier,
+      rate: 0.9,
+      pitch: 1,
+    });
 
-    setReadingWordIndex(0);
-    const interval = setInterval(() => {
-      setReadingWordIndex((current) => (current + 1) % words.length);
-    }, 260);
-
-    return () => clearInterval(interval);
-  }, [currentIndex, isReadingAudioEnabled]);
+    return () => {
+      Speech.stop();
+    };
+  }, [currentIndex, isReadingAudioEnabled, filipinoVoice]);
 
   const loadDefaultFolder = async () => {
     try {
@@ -344,7 +372,8 @@ export default function CameraScreen() {
   const uploadToBackend = async (
     imageUri: string,
     folderId: number | null,
-    name?: string
+    name?: string,
+    outputText?: string
   ) => {
     setUploading(true);
     try {
@@ -357,6 +386,7 @@ export default function CameraScreen() {
 
       formData.append('image', { uri: imageUri, name: `captured_${Date.now()}.jpg`, type } as any);
       formData.append('image_name', name || `Capture_${new Date().toLocaleString()}`);
+      if (outputText) formData.append('output_text', outputText);
 
       const response = await AxiosInstance.post('/images/', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -371,84 +401,36 @@ export default function CameraScreen() {
     }
   };
 
-  const saveTextAsFile = async (text: string, fileName: string, folderId: number | null) => {
-    setUploading(true);
-    try {
-      const formData = new FormData();
-      if (folderId) formData.append('folder', folderId.toString());
-      
-      const blob = new Blob([text], { type: 'text/plain' });
-      
-      formData.append('image', {
-        uri: 'data:text/plain;base64,' + await blobToBase64(blob),
-        name: `${fileName}.txt`,
-        type: 'text/plain',
-      } as any);
-      
-      formData.append('image_name', fileName);
-      
-      const response = await AxiosInstance.post('/images/', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      
-      return response.data && response.data.status === 'success';
-    } catch (error) {
-      console.error('Text save error:', error);
-      return false;
-    } finally {
-      setUploading(false);
-    }
-  };
-  
-  const blobToBase64 = (blob: Blob): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = (reader.result as string).split(',')[1];
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  };
-
   const handleCapture = async (uri: string) => {
     setImage(uri);
+    setBatchImageUris([uri]);
+    setBatchProcessedImageUris([]);
     setPendingImageUri(uri);
-    setProcessedImageUri(null);
+    setProcessedImageUri(uri);
     setPreprocessedImageUri(null);
     setPendingText(null);
-    setShowButtons(false);
+    setShowButtons(true);
     setCurrentIndex(0);
-    setDewarpProgress(0);
+    setDewarpProgress(100);
     setShowFilteredResult(false);
     setIsZooming(false);
-    
-    // Start scanning animation
-    startScanAnimation();
-    
-    try {
-      let processedUri: string;
-      
-      if (useApiScanner) {
-        processedUri = await processImageWithScannerAPI(uri);
-      } else {
-        processedUri = await processImageLocally(uri);
-      }
-      
-      setProcessedImageUri(processedUri);
-      
-      // Stop scanning and show dewarping animation
-      stopScanAnimation();
-      startDewarpAnimation();
-      
-    } catch (error) {
-      console.error('Error processing image:', error);
-      stopScanAnimation();
-      setShowFilteredResult(true);
-      setShowButtons(true);
-      Alert.alert('Warning', 'Processing failed. Please try again.');
-    }
+  };
+
+  const handleBatchCapture = async (uris: string[]) => {
+    if (uris.length === 0) return;
+
+    setImage(uris[0]);
+    setBatchImageUris(uris);
+    setBatchProcessedImageUris([]);
+    setPendingImageUri(uris[0]);
+    setProcessedImageUri(uris[0]);
+    setPreprocessedImageUri(null);
+    setPendingText(null);
+    setShowButtons(true);
+    setCurrentIndex(0);
+    setDewarpProgress(100);
+    setShowFilteredResult(false);
+    setIsZooming(false);
   };
 
   const takePicture = async () => {
@@ -485,11 +467,15 @@ export default function CameraScreen() {
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      allowsMultipleSelection: true,
+      selectionLimit: 10,
       quality: 0.8,
     });
-    if (!result.canceled) await handleCapture(result.assets[0].uri);
+    if (!result.canceled) {
+      await handleBatchCapture(result.assets.map((asset) => asset.uri).slice(0, 10));
+    }
   };
 
   type Slide =
@@ -497,21 +483,38 @@ export default function CameraScreen() {
     | { id: number; text: string; label: string; isLocal: boolean; type: 'text' };
 
   const slides: Slide[] = image
-    ? [
-        { 
-          id: 1, 
-          source: showFilteredResult && preprocessedImageUri ? { uri: preprocessedImageUri } : { uri: image }, 
-          uri: preprocessedImageUri || image, 
-          label: showFilteredResult ? 'Preprocessed (Background Leveled)' : 'Original', 
-          isLocal: false, 
-          type: 'image' 
+    ? (batchImageUris.length > 0 ? batchImageUris : [image]).flatMap((uri, index) => [
+        {
+          id: index * 2 + 1,
+          source: { uri: showFilteredResult ? (batchProcessedImageUris[index] || uri) : uri },
+          uri: batchProcessedImageUris[index] || uri,
+          label: `Photo ${index + 1}`,
+          isLocal: false,
+          type: 'image' as const,
         },
-        { id: 2, text: TRANSLATED_TEXT, label: 'Translated', isLocal: true, type: 'text' },
-      ]
+        {
+          id: index * 2 + 2,
+          text: getSampleOutput(index),
+          label: `Output ${index + 1}`,
+          isLocal: true,
+          type: 'text' as const,
+        },
+      ])
     : [];
 
   const handleSavePress = () => {
     const currentSlide = slides[currentIndex];
+    setBatchSaveMode(null);
+
+    if (batchImageUris.length > 1) {
+      setBatchSaveMode(selectedPhotoIndices.length > 0 ? 'selected' : 'all');
+      setSaveType('text');
+      setImageName(`Batch_${Date.now()}`);
+      setSelectedFolder(defaultFolderId);
+      setShowSaveModal(true);
+      return;
+    }
+
     const name = `${currentSlide.label}_${Date.now()}`;
     setImageName(name);
     setSelectedFolder(defaultFolderId);
@@ -521,26 +524,81 @@ export default function CameraScreen() {
       setPendingText(currentSlide.text ?? null);
       setShowSaveModal(true);
     } else {
-      setSaveType('image');
       setPendingImageUri(currentSlide.uri ?? null);
+      const pairedOutput = slides[currentIndex + 1];
+      if (pairedOutput?.type === 'text') {
+        setSaveType('text');
+        setPendingText(pairedOutput.text);
+      } else {
+        setSaveType('image');
+        setPendingText(null);
+      }
       setShowSaveModal(true);
     }
   };
 
+  const togglePhotoSelection = (photoIndex: number) => {
+    setSelectedPhotoIndices((selected) => selected.includes(photoIndex)
+      ? selected.filter((index) => index !== photoIndex)
+      : [...selected, photoIndex]);
+  };
+
   const handleConfirmSave = async () => {
-    if (saveType === 'text' && pendingText) {
-      const success = await saveTextAsFile(pendingText, imageName, selectedFolder);
-      if (success) {
+    if (batchSaveMode) {
+      const photoIndices = batchSaveMode === 'all'
+        ? batchImageUris.map((_, index) => index)
+        : selectedPhotoIndices;
+      let savedCount = 0;
+
+      for (const photoIndex of photoIndices) {
+        const photoUri = batchImageUris[photoIndex];
+        if (photoUri && await uploadToBackend(
+          photoUri,
+          selectedFolder,
+          `${imageName}_Photo_${photoIndex + 1}`,
+          getSampleOutput(photoIndex),
+        )) {
+          savedCount += 1;
+        }
+      }
+
+      if (savedCount === photoIndices.length) {
+        setBatchSaveMode(null);
         setShowSaveModal(false);
-        Alert.alert('Success', 'Text file saved successfully!');
+        Alert.alert(
+          'Success',
+          `${savedCount} photo and text twin${savedCount === 1 ? '' : 's'} saved!`,
+          [{ text: 'OK', onPress: () => router.replace('/dashboard') }],
+        );
       } else {
-        Alert.alert('Error', 'Failed to save text file. Please try again.');
+        Alert.alert('Warning', `${savedCount} of ${photoIndices.length} twins were saved.`);
+      }
+    } else if (saveType === 'text' && pendingText) {
+      const photoIndex = Math.floor(currentIndex / 2);
+      const photoUri = batchImageUris[photoIndex] || image;
+      const photoSaved = photoUri
+        ? await uploadToBackend(photoUri, selectedFolder, imageName, pendingText)
+        : false;
+
+      if (photoSaved) {
+        setShowSaveModal(false);
+        Alert.alert(
+          'Success',
+          'Photo and text output saved as one item!',
+          [{ text: 'OK', onPress: () => router.replace('/dashboard') }],
+        );
+      } else {
+        Alert.alert('Error', 'Failed to save photo and text output. Please try again.');
       }
     } else if (saveType === 'image' && pendingImageUri) {
       const success = await uploadToBackend(pendingImageUri, selectedFolder, imageName);
       if (success) {
         setShowSaveModal(false);
-        Alert.alert('Success', 'Image saved successfully!');
+        Alert.alert(
+          'Success',
+          'Image saved successfully!',
+          [{ text: 'OK', onPress: () => router.replace('/dashboard') }],
+        );
       } else {
         Alert.alert('Error', 'Failed to save image. Please try again.');
       }
@@ -551,10 +609,14 @@ export default function CameraScreen() {
 
   const handleRetake = () => {
     setImage(null);
+    setBatchImageUris([]);
+    setBatchProcessedImageUris([]);
     setPendingImageUri(null);
     setProcessedImageUri(null);
     setPreprocessedImageUri(null);
     setPendingText(null);
+    setSelectedPhotoIndices([]);
+    setBatchSaveMode(null);
     setShowButtons(false);
     setShowSaveModal(false);
     setCurrentIndex(0);
@@ -577,6 +639,7 @@ export default function CameraScreen() {
         setFolders(prev => [...prev, newFolder]);
         setSelectedFolder(response.data.folder_id);
         setNewFolderName('');
+        setShowNewFolderInput(false);
         Alert.alert('Success', 'Folder created');
       }
     } catch (error) {
@@ -605,7 +668,7 @@ export default function CameraScreen() {
           <View style={styles.algorithmBadge} pointerEvents="none">
             <Ionicons name="analytics-outline" size={14} color="#fff" />
             <Text style={styles.algorithmBadgeText}>
-              {showFilteredResult ? 'Cleaned ✓' : 'Processing...'}
+              Original image
             </Text>
           </View>
           {/* Clean outline overlay */}
@@ -618,9 +681,21 @@ export default function CameraScreen() {
           <View style={styles.straightenedBadge} pointerEvents="none">
             <Ionicons name="checkmark-circle" size={14} color="#fff" />
             <Text style={styles.straightenedBadgeText}>
-              {showFilteredResult ? 'Background Leveled' : 'Processing...'}
+              Processing disconnected
             </Text>
           </View>
+          {batchImageUris.length > 1 ? (
+            <TouchableOpacity
+              style={styles.photoSelectionCheckbox}
+              onPress={() => togglePhotoSelection((item.id - 1) / 2)}
+            >
+              <Ionicons
+                name={selectedPhotoIndices.includes((item.id - 1) / 2) ? 'checkbox' : 'square-outline'}
+                size={28}
+                color="#fff"
+              />
+            </TouchableOpacity>
+          ) : null}
         </View>
       ) : (
         <View style={styles.textContainer}>
@@ -666,24 +741,7 @@ export default function CameraScreen() {
           </View>
           <ScrollView contentContainerStyle={styles.textScrollContent}>
             <Text style={styles.translatedText}>
-              {item.text.split(/(\s+)/).map((part: string, index: number) => {
-                const wordOnly = part.trim();
-                const displayWordIndex = item.text
-                  .split(/\s+/)
-                  .filter(Boolean)
-                  .indexOf(wordOnly);
-
-                const isActiveWord = isReadingAudioEnabled && displayWordIndex === readingWordIndex;
-
-                return (
-                  <Text
-                    key={`word-${index}`}
-                    style={isActiveWord ? styles.readingWordActive : undefined}
-                  >
-                    {part}
-                  </Text>
-                );
-              })}
+              {item.text}
             </Text>
             {isReadingAudioEnabled ? <View style={styles.readingProgressPulse} /> : null}
           </ScrollView>
@@ -806,7 +864,9 @@ export default function CameraScreen() {
             <View style={styles.twoButtonsContainer}>
               <TouchableOpacity style={styles.saveButtonLarge} onPress={handleSavePress}>
                 <Ionicons name="save-outline" size={18} color="#fff" />
-                <Text style={[styles.buttonLargeText, { color: '#fff' }]}>Save</Text>
+                <Text style={[styles.buttonLargeText, { color: '#fff' }]}>
+                  {batchImageUris.length > 1 ? 'Save All' : 'Save'}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.retakeButtonLarge} onPress={handleRetake}>
                 <Ionicons name="camera-outline" size={18} color="#E53935" />
@@ -827,7 +887,7 @@ export default function CameraScreen() {
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>
-                  {saveType === 'text' ? 'Save Text File' : 'Save Image'}
+                  {batchSaveMode ? 'Save Batch Twins' : saveType === 'text' ? 'Save Photo and Output' : 'Save Image'}
                 </Text>
                 <TouchableOpacity onPress={() => setShowSaveModal(false)}>
                   <Ionicons name="close" size={24} color="#8E8E93" />
@@ -855,9 +915,19 @@ export default function CameraScreen() {
               )}
 
               {/* Folder List */}
-              <Text style={[styles.inputLabel, { marginTop: 12, marginBottom: 8 }]}>
-                Select Folder
-              </Text>
+              <View style={styles.inputWithIcon}>
+                <Text style={styles.inputLabel}>Select Folder</Text>
+                <TouchableOpacity
+                  onPress={() => setShowNewFolderInput(true)}
+                  style={styles.addFolderIcon}
+                  accessibilityLabel="Create new folder"
+                >
+                  <Ionicons name="folder-outline" size={20} color="#DC143C" />
+                  <View style={styles.addFolderBadge}>
+                    <Ionicons name="add" size={12} color="#fff" />
+                  </View>
+                </TouchableOpacity>
+              </View>
               <ScrollView style={styles.folderList} showsVerticalScrollIndicator={false}>
                 {folders.map((folder) => (
                   <TouchableOpacity
@@ -918,6 +988,42 @@ export default function CameraScreen() {
                     ? <ActivityIndicator size="small" color="#fff" />
                     : <Text style={styles.saveButtonText}>Save</Text>
                   }
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+        <Modal
+          visible={showNewFolderInput}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowNewFolderInput(false)}
+        >
+          <View style={styles.newFolderModalOverlay}>
+            <View style={styles.newFolderModalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Create New Folder</Text>
+                <TouchableOpacity onPress={() => setShowNewFolderInput(false)}>
+                  <Ionicons name="close" size={24} color="#8E8E93" />
+                </TouchableOpacity>
+              </View>
+              <TextInput
+                style={styles.newFolderInput}
+                placeholder="Folder name"
+                placeholderTextColor="#C7C7CC"
+                value={newFolderName}
+                onChangeText={setNewFolderName}
+                autoFocus
+              />
+              <View style={styles.newFolderModalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.cancelButton]}
+                  onPress={() => setShowNewFolderInput(false)}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.modalButton, styles.saveButton]} onPress={createNewFolder}>
+                  <Text style={styles.saveButtonText}>Create</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1045,6 +1151,14 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     borderRadius: 0,
+  },
+  photoSelectionCheckbox: {
+    position: 'absolute',
+    right: 16,
+    bottom: 16,
+    padding: 7,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.65)',
   },
   straightenOutline: {
     position: 'absolute',
@@ -1309,6 +1423,22 @@ const styles = StyleSheet.create({
   inputWithIcon: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, marginTop: 12 },
   inputLabel: { fontSize: 14, fontWeight: '500', color: '#1A1A1A' },
   editIcon: { padding: 4 },
+  addFolderIcon: { padding: 4, position: 'relative' },
+  addFolderBadge: {
+    position: 'absolute',
+    right: 0,
+    bottom: 0,
+    width: 15,
+    height: 15,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#DC143C',
+  },
+  newFolderModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  newFolderModalContent: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 20, width: '86%' },
+  newFolderInput: { borderWidth: 1, borderColor: '#D1D1D6', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 11, color: '#1A1A1A', fontSize: 15 },
+  newFolderModalButtons: { flexDirection: 'row', gap: 10, marginTop: 18 },
   modalInput: { borderWidth: 1, borderColor: '#E5E5EA', borderRadius: 10, padding: 12, fontSize: 16, color: '#1A1A1A' },
   fileExtensionHint: { fontSize: 12, color: '#8E8E93', marginTop: 4, marginLeft: 4 },
   folderList: { maxHeight: 250, marginTop: 8 },

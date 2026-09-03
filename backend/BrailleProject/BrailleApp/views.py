@@ -537,12 +537,14 @@ class ImageViewSet(viewsets.ViewSet):
             
             # Get image name
             image_name = request.data.get('image_name', uploaded_file.name)
+            output_text = request.data.get('output_text')
             
             # Create image record with the file
             image = Image.objects.create(
                 folder=folder,
                 image_path=uploaded_file,
-                image_name=image_name
+                image_name=image_name,
+                output_text=output_text
             )
             
             serializer = ImageSerializer(image)
