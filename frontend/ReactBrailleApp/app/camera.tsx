@@ -12,7 +12,7 @@ import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
-import * as Speech from 'expo-speech';
+import { synthesizeSpeech, playWithHighlights, type WordTimestamp } from '../utils/azureTts';
 
 const { width, height } = Dimensions.get('window');
 const DEFAULT_FOLDER_KEY = 'default_folder_id';
@@ -57,7 +57,9 @@ export default function CameraScreen() {
   const [useApiScanner, setUseApiScanner] = useState(true);
   const [isZooming, setIsZooming] = useState(false);
   const [isReadingAudioEnabled, setIsReadingAudioEnabled] = useState(false);
-  const [filipinoVoice, setFilipinoVoice] = useState<Speech.Voice | null>(null);
+  const [activeWordIndex, setActiveWordIndex] = useState(-1);
+  const ttsCleanupRef = useRef<(() => void) | null>(null);
+  const ttsLoadingRef = useRef(false);
   const [preprocessedImageUri, setPreprocessedImageUri] = useState<string | null>(null);
   const [showFilteredResult, setShowFilteredResult] = useState(false);
 
@@ -74,51 +76,53 @@ export default function CameraScreen() {
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
+    // Stop any current playback when slide or toggle changes
+    if (ttsCleanupRef.current) {
+      ttsCleanupRef.current();
+      ttsCleanupRef.current = null;
+    }
+    setActiveWordIndex(-1);
 
-    Speech.getAvailableVoicesAsync().then((voices) => {
-      const filipinoVoices = voices
-        .filter((voice) => {
-          const language = voice.language.toLowerCase();
-          return language.startsWith('fil') || language.startsWith('tl');
-        })
-        .sort((firstVoice, secondVoice) => {
-          return Number(secondVoice.quality === Speech.VoiceQuality.Enhanced)
-            - Number(firstVoice.quality === Speech.VoiceQuality.Enhanced);
-        });
-
-      if (isMounted) setFilipinoVoice(filipinoVoices[0] ?? null);
-    }).catch((error) => {
-      console.warn('Unable to load Filipino speech voices:', error);
-    });
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
     const isTextSlide = currentIndex % 2 === 1;
     const photoIndex = Math.floor(currentIndex / 2);
     const textToSpeak = isTextSlide ? getSampleOutput(photoIndex) : null;
 
-    if (!isReadingAudioEnabled || !textToSpeak) {
-      Speech.stop();
-      return;
-    }
+    if (!isReadingAudioEnabled || !textToSpeak) return;
 
-    Speech.stop();
-    Speech.speak(textToSpeak, {
-      language: filipinoVoice?.language ?? 'fil-PH',
-      voice: filipinoVoice?.identifier,
-      rate: 0.9,
-      pitch: 1,
-    });
+    let cancelled = false;
+    ttsLoadingRef.current = true;
+
+    synthesizeSpeech(textToSpeak)
+      .then(({ audioUri, wordTimestamps, totalMs }) => {
+        if (cancelled) return;
+        playWithHighlights(
+          audioUri,
+          wordTimestamps,
+          totalMs,
+          (idx) => { if (!cancelled) setActiveWordIndex(idx); },
+          () => { if (!cancelled) setActiveWordIndex(-1); },
+          textToSpeak,
+        ).then((cleanup) => {
+          if (cancelled) { cleanup(); return; }
+          ttsCleanupRef.current = cleanup;
+        });
+      })
+      .catch((err) => {
+        console.error('Azure TTS error:', err);
+      })
+      .finally(() => {
+        ttsLoadingRef.current = false;
+      });
 
     return () => {
-      Speech.stop();
+      cancelled = true;
+      if (ttsCleanupRef.current) {
+        ttsCleanupRef.current();
+        ttsCleanupRef.current = null;
+      }
+      setActiveWordIndex(-1);
     };
-  }, [currentIndex, isReadingAudioEnabled, filipinoVoice]);
+  }, [currentIndex, isReadingAudioEnabled]);
 
   const loadDefaultFolder = async () => {
     try {
@@ -741,7 +745,17 @@ export default function CameraScreen() {
           </View>
           <ScrollView contentContainerStyle={styles.textScrollContent}>
             <Text style={styles.translatedText}>
-              {item.text}
+              {item.text.split(/\s+/).filter(Boolean).map((word: string, wi: number) => (
+                <Text
+                  key={wi}
+                  style={[
+                    styles.translatedText,
+                    activeWordIndex === wi && isReadingAudioEnabled ? styles.readingWordActive : null,
+                  ]}
+                >
+                  {word}{' '}
+                </Text>
+              ))}
             </Text>
             {isReadingAudioEnabled ? <View style={styles.readingProgressPulse} /> : null}
           </ScrollView>

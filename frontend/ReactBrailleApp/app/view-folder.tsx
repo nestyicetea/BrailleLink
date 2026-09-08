@@ -2,10 +2,10 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, D
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import AxiosInstance from '../axios';
-import * as Speech from 'expo-speech';
+import { synthesizeSpeech, playWithHighlights } from '../utils/azureTts';
 import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
 
 const { width, height } = Dimensions.get('window');
 const COLUMN_WIDTH = (width - 48) / 3;
@@ -39,44 +39,82 @@ export default function ViewFolderScreen() {
   const [isTextViewModal, setIsTextViewModal] = useState(false);
   const [showCombinedOutputModal, setShowCombinedOutputModal] = useState(false);
   const [isCombinedSpeechEnabled, setIsCombinedSpeechEnabled] = useState(false);
-  const [filipinoVoice, setFilipinoVoice] = useState<Speech.Voice | null>(null);
+  const [isSpeechPlaying, setIsSpeechPlaying] = useState(false);
+  const [autoPlay, setAutoPlay] = useState(false);
   const [showCombinedPhotos, setShowCombinedPhotos] = useState(true);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [combinedOutputScope, setCombinedOutputScope] = useState<'all' | 'selected'>('all');
-  const speechResumeIndex = useRef(0);
+  const [speechWordIndex, setSpeechWordIndex] = useState(-1);
+  const speechWordIndexRef = useRef(-1);
+  const ttsCleanupRef = useRef<(() => void) | null>(null);
   const speechSession = useRef(0);
+  const pausedAtMs = useRef(0);
+  const ttsResultRef = useRef<{ audioUri: string | null; wordTimestamps: any[]; totalMs: number } | null>(null);
+  const combinedScrollRef = useRef<ScrollView>(null);
+  const wordRefs = useRef<Map<number, any>>(new Map());
+  const scrollViewHeight = useRef(0);
+  const scrollViewScreenY = useRef(0);
+  const currentScrollY = useRef(0);
+  const isUserScrolling = useRef(false);
+  const userScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const stopCombinedSpeech = () => {
+  const stopCombinedSpeech = (clearPosition = false) => {
+    // Record paused position before stopping
+    if (!clearPosition && speechWordIndexRef.current >= 0 && ttsResultRef.current) {
+      const ts = ttsResultRef.current.wordTimestamps[speechWordIndexRef.current];
+      if (ts) pausedAtMs.current = ts.offsetMs;
+    } else if (clearPosition) {
+      pausedAtMs.current = 0;
+    }
     speechSession.current += 1;
-    Speech.stop();
+    if (ttsCleanupRef.current) {
+      ttsCleanupRef.current();
+      ttsCleanupRef.current = null;
+    }
+    speechWordIndexRef.current = -1;
+    setSpeechWordIndex(-1);
+    setIsSpeechPlaying(false);
+    if (userScrollTimer.current) clearTimeout(userScrollTimer.current);
+    isUserScrolling.current = false;
   };
+
+  const closeCombinedOutputModal = () => {
+    // Pause but keep position so user can resume when they come back
+    stopCombinedSpeech(false);
+    wordRefs.current.clear();
+    setIsCombinedSpeechEnabled(false);
+    setShowCombinedOutputModal(false);
+  };
+
+  // Auto-start speech when modal opens if autoPlay is enabled
+  useEffect(() => {
+    if (showCombinedOutputModal && autoPlay && !isCombinedSpeechEnabled) {
+      setIsCombinedSpeechEnabled(true);
+    }
+  }, [showCombinedOutputModal]);
+  useEffect(() => {
+    if (!isCombinedSpeechEnabled || speechWordIndex < 0 || isUserScrolling.current) return;
+    const wordRef = wordRefs.current.get(speechWordIndex);
+    if (!wordRef || !combinedScrollRef.current) return;
+
+    // measure() gives absolute screen coordinates of the word
+    wordRef.measure((fx: number, fy: number, w: number, h: number, px: number, py: number) => {
+      // py = word's top Y on screen
+      // scrollViewScreenY = ScrollView's top Y on screen
+      // currentScrollY = how far we've already scrolled
+      // So the word's position within scroll content = py - scrollViewScreenY + currentScrollY
+      const wordScrollY = py - scrollViewScreenY.current + currentScrollY.current;
+      const viewH = scrollViewHeight.current || 400;
+      const targetY = Math.max(0, wordScrollY - viewH * 0.33);
+      combinedScrollRef.current?.scrollTo({ y: targetY, animated: true });
+    });
+  }, [speechWordIndex, isCombinedSpeechEnabled]);
 
   useEffect(() => {
     loadFolderContents();
-  }, []);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    Speech.getAvailableVoicesAsync().then((voices) => {
-      const matchingVoices = voices
-        .filter((voice) => {
-          const language = voice.language.toLowerCase();
-          return language.startsWith('fil') || language.startsWith('tl');
-        })
-        .sort((firstVoice, secondVoice) => {
-          return Number(secondVoice.quality === Speech.VoiceQuality.Enhanced)
-            - Number(firstVoice.quality === Speech.VoiceQuality.Enhanced);
-        });
-
-      if (isMounted) setFilipinoVoice(matchingVoices[0] ?? null);
-    }).catch((error) => {
-      console.warn('Unable to load Filipino speech voices:', error);
+    AsyncStorage.getItem('tts_autoplay').then((val) => {
+      if (val === 'true') setAutoPlay(true);
     });
-
-    return () => {
-      isMounted = false;
-    };
   }, []);
 
   const loadFolderContents = async () => {
@@ -237,6 +275,11 @@ export default function ViewFolderScreen() {
       return;
     }
 
+    // Only reset position/cache if opening different content
+    if (scope !== combinedOutputScope) {
+      pausedAtMs.current = 0;
+      ttsResultRef.current = null;
+    }
     setCombinedOutputScope(scope);
     setShowCombinedOutputModal(true);
   };
@@ -279,7 +322,6 @@ export default function ViewFolderScreen() {
             <style>
               body { font-family: sans-serif; color: #1A1A1A; padding: 24px; }
               h1 { color: #DC143C; font-size: 24px; margin-bottom: 24px; }
-              h2 { font-size: 16px; color: #DC143C; margin: 12px 0 8px; }
               p { font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
               .output { page-break-inside: avoid; border-bottom: 1px solid #E5E5EA; padding-bottom: 20px; margin-bottom: 20px; }
               .photo { display: block; width: 100%; max-height: 360px; object-fit: contain; margin-bottom: 12px; }
@@ -288,19 +330,9 @@ export default function ViewFolderScreen() {
           <body><h1>${title}</h1>${outputSections}</body>
         </html>
       `;
-      const { uri } = await Print.printToFileAsync({ html });
-      const canShare = await Sharing.isAvailableAsync();
 
-      if (!canShare) {
-        Alert.alert('PDF created', 'The PDF was created, but sharing is unavailable on this device.');
-        return;
-      }
-
-      await Sharing.shareAsync(uri, {
-        mimeType: 'application/pdf',
-        dialogTitle: `Save ${String(folderName || 'folder')} PDF`,
-        UTI: 'com.adobe.pdf',
-      });
+      // Use the native print/save dialog — no file permissions needed
+      await Print.printAsync({ html });
     } catch (error) {
       console.error('PDF export error:', error);
       Alert.alert('Error', 'Failed to create the PDF. Please try again.');
@@ -312,65 +344,56 @@ export default function ViewFolderScreen() {
   useEffect(() => {
     if (!showCombinedOutputModal || !isCombinedSpeechEnabled || !combinedOutputText) {
       stopCombinedSpeech();
+      setIsSpeechPlaying(false);
       return;
     }
 
     stopCombinedSpeech();
+    setIsSpeechPlaying(true);
     const currentSession = speechSession.current;
-    const resumeStart = Math.min(speechResumeIndex.current, combinedOutputText.length);
-    const remainingText = combinedOutputText.slice(resumeStart);
-    const speechChunks: { text: string; start: number }[] = [];
-    let currentChunk = '';
-    let currentChunkStart = 0;
-    let remainingOffset = 0;
+    let cancelled = false;
+    const resumeFrom = pausedAtMs.current;
 
-    remainingText.split(/\s+/).forEach((word) => {
-      if ((currentChunk + ' ' + word).trim().length > 3500) {
-        speechChunks.push({ text: currentChunk.trim(), start: currentChunkStart });
-        currentChunkStart = remainingOffset;
-        currentChunk = word;
-      } else {
-        currentChunk = `${currentChunk} ${word}`;
-      }
-      remainingOffset += word.length + 1;
-    });
-    if (currentChunk.trim()) speechChunks.push({ text: currentChunk.trim(), start: currentChunkStart });
-
-    let isCancelled = false;
-    const speakChunk = (chunkIndex: number) => {
-      if (isCancelled || currentSession !== speechSession.current || chunkIndex >= speechChunks.length) return;
-
-      const chunk = speechChunks[chunkIndex];
-      Speech.speak(chunk.text, {
-        language: filipinoVoice?.language ?? 'fil-PH',
-        voice: filipinoVoice?.identifier,
-        rate: 0.9,
-        pitch: 1,
-        onDone: () => {
-          if (currentSession !== speechSession.current) return;
-          if (chunkIndex === speechChunks.length - 1) {
-            speechResumeIndex.current = 0;
-          } else {
-            speakChunk(chunkIndex + 1);
+    const startPlayback = (result: { audioUri: string | null; wordTimestamps: any[]; totalMs: number }) => {
+      if (cancelled || currentSession !== speechSession.current) return;
+      ttsResultRef.current = result;
+      playWithHighlights(
+        result.audioUri,
+        result.wordTimestamps,
+        result.totalMs,
+        (idx) => { if (!cancelled) { speechWordIndexRef.current = idx; setSpeechWordIndex(idx); } },
+        () => {
+          if (!cancelled) {
+            speechWordIndexRef.current = -1;
+            setSpeechWordIndex(-1);
+            setIsSpeechPlaying(false);
+            pausedAtMs.current = 0; // finished — reset position
+            ttsResultRef.current = null;
           }
         },
+        combinedOutputText,
+        resumeFrom,
+      ).then((cleanup) => {
+        if (cancelled) { cleanup(); return; }
+        ttsCleanupRef.current = cleanup;
       });
     };
 
-    const startSpeech = async () => {
-      await Speech.stop();
-      if (!isCancelled && currentSession === speechSession.current) {
-        speakChunk(0);
-      }
-    };
-
-    startSpeech();
+    // Reuse cached audio if available and text hasn't changed
+    if (ttsResultRef.current) {
+      startPlayback(ttsResultRef.current);
+    } else {
+      synthesizeSpeech(combinedOutputText)
+        .then(startPlayback)
+        .catch((err) => { console.error('Azure TTS error:', err); setIsSpeechPlaying(false); });
+    }
 
     return () => {
-      isCancelled = true;
+      cancelled = true;
       stopCombinedSpeech();
+      setIsSpeechPlaying(false);
     };
-  }, [isCombinedSpeechEnabled, combinedOutputText, showCombinedOutputModal, filipinoVoice]);
+  }, [isCombinedSpeechEnabled, combinedOutputText, showCombinedOutputModal]);
 
   const renderItem = (item: ImageItem) => {
     const isSelected = selectedImages.includes(item.image_id);
@@ -613,21 +636,13 @@ export default function ViewFolderScreen() {
         visible={showCombinedOutputModal}
         transparent
         animationType="slide"
-        onRequestClose={() => {
-          stopCombinedSpeech();
-          setIsCombinedSpeechEnabled(false);
-          setShowCombinedOutputModal(false);
-        }}
+        onRequestClose={closeCombinedOutputModal}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.combinedOutputModalContent}>
             <View style={styles.combinedOutputHeader}>
               <TouchableOpacity
-                onPress={() => {
-                  stopCombinedSpeech();
-                  setIsCombinedSpeechEnabled(false);
-                  setShowCombinedOutputModal(false);
-                }}
+                onPress={closeCombinedOutputModal}
                 style={styles.combinedOutputBackButton}
                 accessibilityLabel="Back to folder"
               >
@@ -637,16 +652,15 @@ export default function ViewFolderScreen() {
               <View style={styles.combinedOptionsRow}>
                 <TouchableOpacity
                   onPress={() => {
-                    if (isCombinedSpeechEnabled) stopCombinedSpeech();
                     setIsCombinedSpeechEnabled((enabled) => !enabled);
                   }}
                   style={styles.combinedIconToggle}
-                  accessibilityLabel={isCombinedSpeechEnabled ? 'Pause speech' : 'Play speech'}
+                  accessibilityLabel={isSpeechPlaying ? 'Pause speech' : 'Play speech'}
                 >
                   <Ionicons
-                    name={isCombinedSpeechEnabled ? 'pause' : 'play'}
+                    name={isSpeechPlaying ? 'pause' : 'play'}
                     size={21}
-                    color={isCombinedSpeechEnabled ? '#DC143C' : '#8E8E93'}
+                    color={isSpeechPlaying ? '#DC143C' : '#8E8E93'}
                   />
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -675,20 +689,45 @@ export default function ViewFolderScreen() {
               </View>
             </View>
             <ScrollView
+              ref={combinedScrollRef}
               style={styles.combinedOutputScroll}
               contentContainerStyle={styles.combinedOutputContent}
               showsVerticalScrollIndicator
               indicatorStyle="black"
+              onLayout={(e) => {
+                scrollViewHeight.current = e.nativeEvent.layout.height;
+                // Capture screen Y of the ScrollView
+                combinedScrollRef.current?.measure((_fx, _fy, _w, _h, _px, py) => {
+                  scrollViewScreenY.current = py;
+                });
+              }}
+              onScroll={(e) => {
+                currentScrollY.current = e.nativeEvent.contentOffset.y;
+              }}
+              scrollEventThrottle={16}
+              onScrollBeginDrag={() => {
+                isUserScrolling.current = true;
+                if (userScrollTimer.current) clearTimeout(userScrollTimer.current);
+                userScrollTimer.current = setTimeout(() => {
+                  isUserScrolling.current = false;
+                }, 3000);
+              }}
             >
               {(() => {
-                let outputOffset = 0;
+                let globalWordOffset = 0;
 
                 return combinedOutputItems.map((item) => {
                   const outputText = item.output_text || '';
-                  outputOffset += outputText.length + 2;
+                  const words = outputText.split(/\s+/).filter(Boolean);
+                  const itemWordStart = globalWordOffset;
+                  globalWordOffset += words.length;
+                  const itemId = item.image_id;
 
                   return (
-                    <View key={item.image_id} style={styles.combinedOutputItem}>
+                    <View
+                      key={itemId}
+                      style={styles.combinedOutputItem}
+                    >
                       {showCombinedPhotos && item.image_url ? (
                         <Image
                           source={{ uri: item.image_url }}
@@ -696,9 +735,24 @@ export default function ViewFolderScreen() {
                           resizeMode="contain"
                         />
                       ) : null}
-                      <Text style={styles.fullScreenText}>
-                        {outputText}
-                      </Text>
+                      <View style={styles.wordWrapContainer}>
+                        {words.map((word, wi) => {
+                          const globalIdx = itemWordStart + wi;
+                          const isActive = isCombinedSpeechEnabled && speechWordIndex === globalIdx;
+                          return (
+                            <Text
+                              key={wi}
+                              ref={(r) => {
+                                if (r) wordRefs.current.set(globalIdx, r);
+                                else wordRefs.current.delete(globalIdx);
+                              }}
+                              style={[styles.wordToken, isActive && styles.speechWordActive]}
+                            >
+                              {word}{' '}
+                            </Text>
+                          );
+                        })}
+                      </View>
                     </View>
                   );
                 });
@@ -1049,6 +1103,16 @@ const styles = StyleSheet.create({
   speechWordActive: {
     backgroundColor: 'rgba(220, 20, 60, 0.18)',
     color: '#000',
+  },
+  wordWrapContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  wordToken: {
+    fontSize: 16,
+    color: '#1A1A1A',
+    fontFamily: 'monospace',
+    lineHeight: 26,
   },
   combinedOutputModalContent: {
     flex: 1,

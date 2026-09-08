@@ -1,10 +1,10 @@
 {
-  "compilerOptions": {
-    "typeRoots": [
-      "./env.ts"
-    ]
-  },
   "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": false,
+    "skipLibCheck": true,
+    "baseUrl": "."
+  },
   "include": [
     "**/*.ts",
     "**/*.tsx",

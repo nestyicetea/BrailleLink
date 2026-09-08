@@ -1,10 +1,25 @@
-import { View, Text, StyleSheet } from 'react-native';
-import { usePathname } from 'expo-router';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { usePathname, router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 
 export default function TopNav() {
+  const pathname = usePathname();
+  const isSettings = pathname === '/settings';
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>BrailleLink</Text>
+      <TouchableOpacity
+        onPress={() => router.push('/settings')}
+        style={styles.settingsButton}
+        accessibilityLabel="Settings"
+      >
+        <Ionicons
+          name={isSettings ? 'settings' : 'settings-outline'}
+          size={22}
+          color={isSettings ? '#DC143C' : '#555'}
+        />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -25,5 +40,10 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#333',
+    flex: 1,
+  },
+  settingsButton: {
+    width: 32,
+    alignItems: 'center',
   },
 });

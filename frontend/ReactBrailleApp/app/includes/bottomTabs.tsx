@@ -7,6 +7,7 @@ export default function BottomTabs() {
 
   const isDashboard = pathname === '/dashboard';
   const isFiles = pathname === '/files';
+  const isSettings = pathname === '/settings';
 
   return (
     <View style={styles.wrapper}>
@@ -26,9 +27,7 @@ export default function BottomTabs() {
               color={isDashboard ? '#DC143C' : '#9E9E9E'}
             />
           </View>
-          <Text style={[styles.label, isDashboard && styles.activeLabel]}>
-            Dashboard
-          </Text>
+          <Text style={[styles.label, isDashboard && styles.activeLabel]}>Dashboard</Text>
         </TouchableOpacity>
 
         {/* Center spacer for FAB */}
@@ -47,9 +46,7 @@ export default function BottomTabs() {
               color={isFiles ? '#DC143C' : '#9E9E9E'}
             />
           </View>
-          <Text style={[styles.label, isFiles && styles.activeLabel]}>
-            Files
-          </Text>
+          <Text style={[styles.label, isFiles && styles.activeLabel]}>Files</Text>
         </TouchableOpacity>
       </View>
 

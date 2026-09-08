@@ -43,6 +43,7 @@ lib/
 lib64/
 pyvenv.cfg
 pip-selfcheck.json
+myenv/
 
 # Testing
 .coverage
@@ -74,6 +75,9 @@ dmypy.json
 *.bak
 *.backup
 *.tmp
+
+# PDF files
+*.pdf
 
 # Node modules (if using npm for frontend)
 node_modules/

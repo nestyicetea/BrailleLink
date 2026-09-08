@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
 import { useState, useCallback, useEffect } from 'react';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -60,11 +60,6 @@ export default function DashboardScreen() {
           <Text style={styles.statValue}>{stats.images}</Text>
           <Text style={styles.statLabel}>images</Text>
         </TouchableOpacity>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{/* score */ 0}</Text>
-          <Text style={styles.statLabel}>score</Text>
-        </View>
       </View>
 
       {/* Secondary Stats Row - New */}
