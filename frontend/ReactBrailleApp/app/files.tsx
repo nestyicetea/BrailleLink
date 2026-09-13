@@ -1,5 +1,5 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, RefreshControl, Dimensions, TextInput, Alert, Modal } from 'react-native';
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AxiosInstance from '../axios';
 import { router } from 'expo-router';
@@ -169,6 +169,17 @@ export default function FilesScreen() {
     return filtered;
   };
 
+  const folderLastTap = useRef<Record<number, number>>({});
+
+  const handleFolderNameDoubleTap = (item: FileItem) => {
+    const now = Date.now();
+    const last = folderLastTap.current[item.folder_id] || 0;
+    if (now - last < 300) {
+      handleRenamePress(item);
+    }
+    folderLastTap.current[item.folder_id] = now;
+  };
+
   const renderItem = (item: FileItem) => (
     <TouchableOpacity
       key={item.folder_id}
@@ -188,8 +199,9 @@ export default function FilesScreen() {
         <Text style={styles.badgeText}>{item.image_count || 0}</Text>
       </View>
       
-      {/* Folder Name - Click to Rename */}
-      <TouchableOpacity onPress={() => handleRenamePress(item)}>
+      {/* Folder Name - Double tap to Rename */}
+      <TouchableOpacity onPress={() => handleFolderNameDoubleTap(item)} style={styles.nameRow}>
+        <Ionicons name="pencil" size={10} color="#8E8E93" style={styles.pencilIcon} />
         <Text style={styles.itemName} numberOfLines={1}>
           {item.folder_name}
         </Text>
@@ -463,7 +475,7 @@ const styles = StyleSheet.create({
   filterButtonInner: {
     paddingHorizontal: 12,
     paddingVertical: 8,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#F8F8F8',
     borderRadius: 20,
   },
   gridContainer: {
@@ -507,6 +519,15 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#1A1A1A',
     textAlign: 'center',
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  pencilIcon: {
+    opacity: 0.35,
   },
   itemCount: {
     fontSize: 11,
@@ -561,7 +582,7 @@ const styles = StyleSheet.create({
   emptyButton: {
     paddingHorizontal: 20,
     paddingVertical: 10,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#F8F8F8',
     borderRadius: 8,
   },
   emptyButtonText: {
@@ -604,6 +625,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1A1A1A',
     marginBottom: 20,
+    backgroundColor: '#FFFFFF',
   },
   modalButtons: {
     flexDirection: 'row',
@@ -616,7 +638,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cancelButton: {
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#F8F8F8',
   },
   cancelButtonText: {
     color: '#8E8E93',

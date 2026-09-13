@@ -53,6 +53,25 @@ export default function SettingsScreen() {
             />
           </View>
         </View>
+
+        {/* Storage Section */}
+        <Text style={styles.sectionHeader}>Storage</Text>
+        <View style={styles.section}>
+          <TouchableOpacity 
+            style={styles.row}
+            onPress={() => router.push('/recently-deleted')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.rowLeft}>
+              <Ionicons name="trash-outline" size={20} color="#DC143C" style={styles.rowIcon} />
+              <View>
+                <Text style={styles.rowTitle}>Recently Deleted</Text>
+                <Text style={styles.rowSubtitle}>Manage deleted folders and images</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#C7C7CC" />
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </View>
   );

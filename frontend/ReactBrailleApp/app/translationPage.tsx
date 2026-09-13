@@ -268,7 +268,7 @@ export default function TranslationPage() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#F8F8F8',
   },
   header: {
     flexDirection: 'row',
@@ -359,6 +359,7 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
     color: '#1A1A1A',
+    backgroundColor: '#FFFFFF',
   },
   folderList: {
     maxHeight: 250,
@@ -371,7 +372,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    borderBottomColor: '#F2F2F7',
   },
   folderOptionSelected: {
     backgroundColor: '#F8F8F8',
@@ -408,7 +409,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cancelButton: {
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#F8F8F8',
   },
   cancelButtonText: {
     color: '#8E8E93',

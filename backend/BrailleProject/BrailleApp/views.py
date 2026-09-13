@@ -20,9 +20,9 @@ class FolderViewSet(viewsets.ViewSet):
     Handle all Folder operations
     """
     
-    # GET /folders/ - List all folders
+    # GET /folders/ - List all folders (exclude deleted)
     def list(self, request):
-        folders = Folder.objects.all()
+        folders = Folder.objects.filter(deleted_at__isnull=True)
         serializer = FolderSerializer(folders, many=True)
         
         return Response({
@@ -120,16 +120,69 @@ class FolderViewSet(viewsets.ViewSet):
             'errors': serializer.errors
         }, status=status.HTTP_400_BAD_REQUEST)
     
-    # DELETE /folders/{id}/ - Delete folder
+    # DELETE /folders/{id}/ - Soft delete folder
     def destroy(self, request, pk=None):
+        from django.utils import timezone
         folder = get_object_or_404(Folder, pk=pk)
         folder_name = folder.folder_name
-        folder.delete()
+        
+        # Soft delete the folder and all its images
+        folder.deleted_at = timezone.now()
+        folder.save()
+        
+        # Also soft delete all images in this folder
+        Image.objects.filter(folder=folder, deleted_at__isnull=True).update(deleted_at=timezone.now())
         
         return Response({
             'status': 'success',
-            'message': f'Folder "{folder_name}" deleted successfully',
+            'message': f'Folder "{folder_name}" moved to recently deleted',
             'deleted_folder_id': pk
+        }, status=status.HTTP_200_OK)
+    
+    # GET /folders/recently_deleted/ - List deleted folders
+    @action(detail=False, methods=['GET'])
+    def recently_deleted(self, request):
+        folders = Folder.objects.filter(deleted_at__isnull=False).order_by('-deleted_at')
+        serializer = FolderSerializer(folders, many=True)
+        
+        return Response({
+            'status': 'success',
+            'count': len(serializer.data),
+            'folders': serializer.data
+        }, status=status.HTTP_200_OK)
+    
+    # POST /folders/{id}/restore/ - Restore deleted folder
+    @action(detail=True, methods=['POST'])
+    def restore(self, request, pk=None):
+        folder = get_object_or_404(Folder, pk=pk)
+        
+        if folder.deleted_at is None:
+            return Response({
+                'status': 'error',
+                'message': 'Folder is not deleted'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Restore the folder and all its images
+        folder.deleted_at = None
+        folder.save()
+        
+        Image.objects.filter(folder=folder).update(deleted_at=None)
+        
+        return Response({
+            'status': 'success',
+            'message': f'Folder "{folder.folder_name}" restored successfully'
+        }, status=status.HTTP_200_OK)
+    
+    # DELETE /folders/{id}/permanent/ - Permanently delete folder
+    @action(detail=True, methods=['DELETE'])
+    def permanent(self, request, pk=None):
+        folder = get_object_or_404(Folder, pk=pk)
+        folder_name = folder.folder_name
+        folder.delete()  # Hard delete
+        
+        return Response({
+            'status': 'success',
+            'message': f'Folder "{folder_name}" permanently deleted'
         }, status=status.HTTP_200_OK)
 
 
@@ -487,15 +540,25 @@ class ImageViewSet(viewsets.ViewSet):
     Handle all Image operations
     """
     
-    # GET /images/ - List all images
+    # GET /images/ - List all images (exclude deleted)
     def list(self, request):
-        images = Image.objects.all()
+        images = Image.objects.filter(deleted_at__isnull=True)
         serializer = ImageSerializer(images, many=True)
+        
+        images_data = []
+        for img, data in zip(images, serializer.data):
+            item = dict(data)
+            # Add actual file size in bytes
+            try:
+                item['file_size'] = img.image_path.size if img.image_path else 0
+            except Exception:
+                item['file_size'] = 0
+            images_data.append(item)
         
         return Response({
             'status': 'success',
-            'count': len(serializer.data),
-            'images': serializer.data
+            'count': len(images_data),
+            'images': images_data
         }, status=status.HTTP_200_OK)
     
     # GET /images/{id}/ - Get single image
@@ -651,41 +714,93 @@ class ImageViewSet(viewsets.ViewSet):
     def partial_update(self, request, pk=None):
         image = get_object_or_404(Image, pk=pk)
         
-        update_data = {}
-        if 'folder' in request.data:
-            update_data['folder'] = request.data['folder']
-        if 'image_path' in request.data:
-            update_data['image_path'] = request.data['image_path']
         if 'image_name' in request.data:
-            update_data['image_name'] = request.data['image_name']
+            image.image_name = request.data['image_name']
+        if 'folder' in request.data:
+            folder_id = request.data['folder']
+            if folder_id:
+                image.folder = get_object_or_404(Folder, pk=folder_id)
+            else:
+                image.folder = None
+        if 'output_text' in request.data:
+            image.output_text = request.data['output_text']
         
-        serializer = ImageSerializer(image, data=update_data, partial=True)
-        
-        if serializer.is_valid():
-            updated_image = serializer.save()
-            
-            return Response({
-                'image_id': updated_image.image_id,
-                'folder': updated_image.folder.folder_id if updated_image.folder else None,
-                'image_path': updated_image.image_path,
-                'image_name': updated_image.image_name,
-                'created_at': updated_image.created_at,
-                'updated_at': updated_image.updated_at
-            }, status=status.HTTP_200_OK)
+        image.save()
         
         return Response({
-            'status': 'error',
-            'errors': serializer.errors
-        }, status=status.HTTP_400_BAD_REQUEST)
+            'image_id': image.image_id,
+            'folder': image.folder.folder_id if image.folder else None,
+            'image_path': str(image.image_path),
+            'image_name': image.image_name,
+            'created_at': image.created_at,
+            'updated_at': image.updated_at
+        }, status=status.HTTP_200_OK)
     
-    # DELETE /images/{id}/ - Delete image
+    # DELETE /images/{id}/ - Soft delete image
     def destroy(self, request, pk=None):
+        from django.utils import timezone
         image = get_object_or_404(Image, pk=pk)
         image_name = image.image_name or image.image_path
-        image.delete()
+        
+        # Soft delete
+        image.deleted_at = timezone.now()
+        image.save()
         
         return Response({
             'status': 'success',
-            'message': f'Image "{image_name}" deleted successfully',
+            'message': f'Image "{image_name}" moved to recently deleted',
             'deleted_image_id': pk
+        }, status=status.HTTP_200_OK)
+    
+    # GET /images/recently_deleted/ - List deleted images
+    @action(detail=False, methods=['GET'])
+    def recently_deleted(self, request):
+        images = Image.objects.filter(deleted_at__isnull=False).order_by('-deleted_at')
+        serializer = ImageSerializer(images, many=True)
+        
+        images_data = []
+        for img, data in zip(images, serializer.data):
+            item = dict(data)
+            try:
+                item['file_size'] = img.image_path.size if img.image_path else 0
+            except Exception:
+                item['file_size'] = 0
+            images_data.append(item)
+        
+        return Response({
+            'status': 'success',
+            'count': len(images_data),
+            'images': images_data
+        }, status=status.HTTP_200_OK)
+    
+    # POST /images/{id}/restore/ - Restore deleted image
+    @action(detail=True, methods=['POST'])
+    def restore(self, request, pk=None):
+        image = get_object_or_404(Image, pk=pk)
+        
+        if image.deleted_at is None:
+            return Response({
+                'status': 'error',
+                'message': 'Image is not deleted'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Restore the image
+        image.deleted_at = None
+        image.save()
+        
+        return Response({
+            'status': 'success',
+            'message': f'Image "{image.image_name}" restored successfully'
+        }, status=status.HTTP_200_OK)
+    
+    # DELETE /images/{id}/permanent/ - Permanently delete image
+    @action(detail=True, methods=['DELETE'])
+    def permanent(self, request, pk=None):
+        image = get_object_or_404(Image, pk=pk)
+        image_name = image.image_name or str(image.image_path)
+        image.delete()  # Hard delete
+        
+        return Response({
+            'status': 'success',
+            'message': f'Image "{image_name}" permanently deleted'
         }, status=status.HTTP_200_OK)

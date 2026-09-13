@@ -10,7 +10,9 @@ export default function RootLayout() {
     pathname === '/camera' ||
     pathname === '/translationPage' ||
     pathname.startsWith('/view-folder') ||
-    pathname === '/settings';
+    pathname === '/settings' ||
+    pathname === '/recents' ||
+    pathname === '/recently-deleted';
 
   return (
     <View style={{ flex: 1 }}>

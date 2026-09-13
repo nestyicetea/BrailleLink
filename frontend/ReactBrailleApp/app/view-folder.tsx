@@ -44,6 +44,11 @@ export default function ViewFolderScreen() {
   const [showCombinedPhotos, setShowCombinedPhotos] = useState(true);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [combinedOutputScope, setCombinedOutputScope] = useState<'all' | 'selected'>('all');
+  const [showItemPhoto, setShowItemPhoto] = useState(true);
+  const [isExportingItemPdf, setIsExportingItemPdf] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [speechWordIndex, setSpeechWordIndex] = useState(-1);
   const speechWordIndexRef = useRef(-1);
   const ttsCleanupRef = useRef<(() => void) | null>(null);
@@ -57,6 +62,80 @@ export default function ViewFolderScreen() {
   const currentScrollY = useRef(0);
   const isUserScrolling = useRef(false);
   const userScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Individual item TTS states
+  const [isItemSpeechEnabled, setIsItemSpeechEnabled] = useState(false);
+  const [isItemSpeechPlaying, setIsItemSpeechPlaying] = useState(false);
+  const [itemSpeechWordIndex, setItemSpeechWordIndex] = useState(-1);
+  const itemSpeechWordIndexRef = useRef(-1);
+  const itemTtsCleanupRef = useRef<(() => void) | null>(null);
+  const itemSpeechSession = useRef(0);
+  const itemPausedAtMs = useRef(0);
+  const itemTtsResultRef = useRef<{ audioUri: string | null; wordTimestamps: any[]; totalMs: number } | null>(null);
+  const itemScrollRef = useRef<ScrollView>(null);
+  const itemWordRefs = useRef<Map<number, any>>(new Map());
+  const itemScrollViewHeight = useRef(0);
+  const itemScrollViewScreenY = useRef(0);
+  const itemCurrentScrollY = useRef(0);
+  const itemIsUserScrolling = useRef(false);
+  const itemUserScrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const stopItemSpeech = (clearPosition = false) => {
+    if (!clearPosition && itemSpeechWordIndexRef.current >= 0 && itemTtsResultRef.current) {
+      const ts = itemTtsResultRef.current.wordTimestamps[itemSpeechWordIndexRef.current];
+      if (ts) itemPausedAtMs.current = ts.offsetMs;
+    } else if (clearPosition) {
+      itemPausedAtMs.current = 0;
+    }
+    itemSpeechSession.current += 1;
+    if (itemTtsCleanupRef.current) {
+      itemTtsCleanupRef.current();
+      itemTtsCleanupRef.current = null;
+    }
+    itemSpeechWordIndexRef.current = -1;
+    setItemSpeechWordIndex(-1);
+    setIsItemSpeechPlaying(false);
+    if (itemUserScrollTimer.current) clearTimeout(itemUserScrollTimer.current);
+    itemIsUserScrolling.current = false;
+  };
+
+  const closeViewModal = () => {
+    stopItemSpeech(false);
+    itemWordRefs.current.clear();
+    setIsItemSpeechEnabled(false);
+    setShowViewModal(false);
+  };
+
+  const exportItemPdf = async () => {
+    if (!selectedItem?.output_text) return;
+    setIsExportingItemPdf(true);
+    try {
+      const title = escapeHtml(selectedItem.image_name || 'Untitled');
+      const photoSection = showItemPhoto && selectedItem.image_url
+        ? `<img src="${escapeHtml(selectedItem.image_url)}" class="photo" />`
+        : '';
+      const html = `
+        <html>
+          <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <style>
+              body { font-family: sans-serif; color: #1A1A1A; padding: 24px; }
+              h1 { color: #DC143C; font-size: 24px; margin-bottom: 24px; }
+              p { font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
+              .photo { display: block; width: 100%; max-height: 360px; object-fit: contain; margin-bottom: 12px; }
+            </style>
+          </head>
+          <body><h1>${title}</h1>${photoSection}<p>${escapeHtml(selectedItem.output_text)}</p></body>
+        </html>
+      `;
+      await Print.printAsync({ html });
+    } catch (error) {
+      console.error('PDF export error:', error);
+      Alert.alert('Error', 'Failed to create the PDF. Please try again.');
+    } finally {
+      setIsExportingItemPdf(false);
+    }
+  };
 
   const stopCombinedSpeech = (clearPosition = false) => {
     // Record paused position before stopping
@@ -92,6 +171,76 @@ export default function ViewFolderScreen() {
       setIsCombinedSpeechEnabled(true);
     }
   }, [showCombinedOutputModal]);
+
+  // Individual item TTS effect
+  useEffect(() => {
+    if (!showViewModal || !isItemSpeechEnabled || !selectedItem?.output_text) {
+      stopItemSpeech();
+      setIsItemSpeechPlaying(false);
+      return;
+    }
+
+    stopItemSpeech();
+    setIsItemSpeechPlaying(true);
+    const currentSession = itemSpeechSession.current;
+    let cancelled = false;
+    const resumeFrom = itemPausedAtMs.current;
+    const textToSpeak = selectedItem.output_text;
+
+    const startPlayback = (result: { audioUri: string | null; wordTimestamps: any[]; totalMs: number }) => {
+      if (cancelled || currentSession !== itemSpeechSession.current) return;
+      itemTtsResultRef.current = result;
+      playWithHighlights(
+        result.audioUri,
+        result.wordTimestamps,
+        result.totalMs,
+        (idx) => { if (!cancelled) { itemSpeechWordIndexRef.current = idx; setItemSpeechWordIndex(idx); } },
+        () => {
+          if (!cancelled) {
+            itemSpeechWordIndexRef.current = -1;
+            setItemSpeechWordIndex(-1);
+            setIsItemSpeechPlaying(false);
+            itemPausedAtMs.current = 0;
+            itemTtsResultRef.current = null;
+          }
+        },
+        textToSpeak,
+        resumeFrom,
+      ).then((cleanup) => {
+        if (cancelled) { cleanup(); return; }
+        itemTtsCleanupRef.current = cleanup;
+      });
+    };
+
+    if (itemTtsResultRef.current) {
+      startPlayback(itemTtsResultRef.current);
+    } else {
+      synthesizeSpeech(textToSpeak)
+        .then(startPlayback)
+        .catch((err) => { console.error('Azure TTS error:', err); setIsItemSpeechPlaying(false); });
+    }
+
+    return () => {
+      cancelled = true;
+      stopItemSpeech();
+      setIsItemSpeechPlaying(false);
+    };
+  }, [isItemSpeechEnabled, selectedItem?.output_text, showViewModal]);
+
+  // Auto-scroll for individual item TTS
+  useEffect(() => {
+    if (!isItemSpeechEnabled || itemSpeechWordIndex < 0 || itemIsUserScrolling.current) return;
+    const wordRef = itemWordRefs.current.get(itemSpeechWordIndex);
+    if (!wordRef || !itemScrollRef.current) return;
+
+    wordRef.measure((fx: number, fy: number, w: number, h: number, px: number, py: number) => {
+      const wordScrollY = py - itemScrollViewScreenY.current + itemCurrentScrollY.current;
+      const viewH = itemScrollViewHeight.current || 400;
+      const targetY = Math.max(0, wordScrollY - viewH * 0.33);
+      itemScrollRef.current?.scrollTo({ y: targetY, animated: true });
+    });
+  }, [itemSpeechWordIndex, isItemSpeechEnabled]);
+
   useEffect(() => {
     if (!isCombinedSpeechEnabled || speechWordIndex < 0 || isUserScrolling.current) return;
     const wordRef = wordRefs.current.get(speechWordIndex);
@@ -395,6 +544,19 @@ export default function ViewFolderScreen() {
     };
   }, [isCombinedSpeechEnabled, combinedOutputText, showCombinedOutputModal]);
 
+  const imageLastTap = useRef<Record<number, number>>({});
+
+  const handleImageNameDoubleTap = (item: ImageItem) => {
+    const now = Date.now();
+    const last = imageLastTap.current[item.image_id] || 0;
+    if (now - last < 300) {
+      setRenamingItem(item);
+      setNewItemName(item.image_name || '');
+      setShowRenameModal(true);
+    }
+    imageLastTap.current[item.image_id] = now;
+  };
+
   const renderItem = (item: ImageItem) => {
     const isSelected = selectedImages.includes(item.image_id);
     
@@ -425,34 +587,103 @@ export default function ViewFolderScreen() {
             </View>
           )}
         </View>
-        <TouchableOpacity onPress={() => {
-          setRenamingItem(item);
-          setNewItemName(item.image_name || '');
-          setShowRenameModal(true);
-        }}>
+        {/* Image Name - Double tap to Rename */}
+        <TouchableOpacity onPress={() => handleImageNameDoubleTap(item)} style={styles.nameRow}>
+          <Ionicons name="pencil" size={10} color="#8E8E93" style={styles.pencilIcon} />
           <Text style={styles.itemName} numberOfLines={1}>
             {item.image_name || 'Unnamed'}
           </Text>
         </TouchableOpacity>
         <Text style={styles.itemDate}>{formatDate(item.created_at)}</Text>
-        {item.is_text && !item.output_text && (
-          <View style={styles.fileTypeBadge}>
-            <Text style={styles.fileTypeText}>TXT</Text>
-          </View>
-        )}
-        {item.output_text && (
-          <View style={styles.fileTypeBadge}>
-            <Text style={styles.fileTypeText}>PHOTO + TXT</Text>
-          </View>
-        )}
       </TouchableOpacity>
     );
   };
 
+  const renderListItem = (item: ImageItem) => {
+    const isSelected = selectedImages.includes(item.image_id);
+
+    return (
+      <TouchableOpacity
+        key={item.image_id}
+        style={[styles.listItem, isSelected && styles.selectedItem]}
+        onPress={() => handleItemPress(item)}
+        onLongPress={() => handleLongPress(item)}
+        activeOpacity={0.7}
+      >
+        {/* Thumbnail */}
+        <View style={styles.listThumbContainer}>
+          {item.is_text ? (
+            <View style={styles.listThumbPlaceholder}>
+              <Ionicons name="document-text-outline" size={24} color="#DC143C" />
+            </View>
+          ) : item.image_url ? (
+            <Image source={{ uri: item.image_url }} style={styles.listThumb} />
+          ) : (
+            <View style={styles.listThumbPlaceholder}>
+              <Ionicons name="image-outline" size={24} color="#8E8E93" />
+            </View>
+          )}
+          {isSelected && (
+            <View style={styles.checkmarkOverlay}>
+              <Ionicons name="checkmark-circle" size={20} color="#DC143C" />
+            </View>
+          )}
+        </View>
+
+        {/* Info */}
+        <View style={styles.listInfo}>
+          <TouchableOpacity onPress={() => handleImageNameDoubleTap(item)} style={styles.nameRow}>
+            <Ionicons name="pencil" size={10} color="#8E8E93" style={styles.pencilIcon} />
+            <Text style={styles.listItemName} numberOfLines={1}>
+              {item.image_name || 'Unnamed'}
+            </Text>
+          </TouchableOpacity>
+          {item.output_text ? (
+            <Text style={styles.listItemSubtitle} numberOfLines={2}>
+              {item.output_text}
+            </Text>
+          ) : (
+            <Text style={styles.listItemDate}>{formatDate(item.created_at)}</Text>
+          )}
+        </View>
+
+        {/* chevron */}
+        <View style={styles.listMeta}>
+          <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const getFilteredAndSortedImages = () => {
+    let filtered = [...images];
+    if (searchQuery) {
+      filtered = filtered.filter(img =>
+        (img.image_name || '').toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+    filtered.sort((a, b) => {
+      const dateA = new Date(a.created_at).getTime();
+      const dateB = new Date(b.created_at).getTime();
+      return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+    });
+    return filtered;
+  };
+
   const renderGrid = () => {
+    const filtered = getFilteredAndSortedImages();
+
+    if (viewMode === 'list') {
+      return (
+        <View style={styles.listContainer}>
+          {filtered.map(renderListItem)}
+        </View>
+      );
+    }
+
     const rows = [];
-    for (let i = 0; i < images.length; i += 3) {
-      const rowItems = images.slice(i, i + 3);
+    for (let i = 0; i < filtered.length; i += 3) {
+      const rowItems = filtered.slice(i, i + 3);
       rows.push(
         <View key={i} style={styles.row}>
           {rowItems.map(renderItem)}
@@ -489,7 +720,16 @@ export default function ViewFolderScreen() {
             <Text style={styles.cancelButtonText}>Cancel</Text>
           </TouchableOpacity>
         ) : (
-          <View style={styles.placeholder} />
+          <TouchableOpacity
+            onPress={() => setViewMode(v => v === 'grid' ? 'list' : 'grid')}
+            style={styles.viewToggleButton}
+          >
+            <Ionicons
+              name={viewMode === 'grid' ? 'list-outline' : 'grid-outline'}
+              size={22}
+              color="#1A1A1A"
+            />
+          </TouchableOpacity>
         )}
       </View>
 
@@ -548,6 +788,33 @@ export default function ViewFolderScreen() {
           />
         }
       >
+        {/* Search & Filter Row */}
+        <View style={styles.searchContainer}>
+          <View style={styles.searchBar}>
+            <Ionicons name="search-outline" size={18} color="#8E8E93" style={styles.searchIcon} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search"
+              placeholderTextColor="#C7C7CC"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+            />
+            {searchQuery !== '' && (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={16} color="#8E8E93" />
+              </TouchableOpacity>
+            )}
+          </View>
+          <TouchableOpacity
+            style={styles.filterButton}
+            onPress={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
+          >
+            <View style={styles.filterButtonInner}>
+              <Ionicons name="swap-vertical-outline" size={18} color="#1A1A1A" />
+            </View>
+          </TouchableOpacity>
+        </View>
+
         {images.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyIcon}>📭</Text>
@@ -568,20 +835,55 @@ export default function ViewFolderScreen() {
       </ScrollView>
 
       {/* View Modal - Full screen for both images and text */}
-      <Modal visible={showViewModal} transparent animationType="none" onRequestClose={() => setShowViewModal(false)}>
+      <Modal visible={showViewModal} transparent animationType="none" onRequestClose={closeViewModal}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            {/* Close Button */}
-            <TouchableOpacity style={styles.modalClose} onPress={() => setShowViewModal(false)}>
-              <Ionicons name="close" size={30} color="#1A1A1A" />
-            </TouchableOpacity>
-
-            {/* File Name at top */}
+            {/* Header with Back Button, TTS, Image Toggle, PDF */}
             <View style={styles.modalHeader}>
-              <Text style={styles.modalHeaderTitle}>
+              <TouchableOpacity style={styles.modalBackButton} onPress={closeViewModal}>
+                <Ionicons name="chevron-back" size={28} color="#1A1A1A" />
+              </TouchableOpacity>
+              <Text style={styles.modalHeaderTitle} numberOfLines={1}>
                 {selectedItem?.image_name || 'Unnamed'}
                 {selectedItem?.is_text ? '.txt' : ''}
               </Text>
+              {selectedItem?.output_text ? (
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    onPress={() => setIsItemSpeechEnabled(!isItemSpeechEnabled)}
+                    style={styles.combinedIconToggle}
+                  >
+                    <Ionicons
+                      name={isItemSpeechPlaying ? 'pause' : 'play'}
+                      size={21}
+                      color={isItemSpeechPlaying ? '#DC143C' : '#8E8E93'}
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => setShowItemPhoto(v => !v)}
+                    style={styles.combinedIconToggle}
+                  >
+                    <Ionicons
+                      name={showItemPhoto ? 'image' : 'image-outline'}
+                      size={21}
+                      color={showItemPhoto ? '#DC143C' : '#8E8E93'}
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={exportItemPdf}
+                    style={styles.combinedIconToggle}
+                    disabled={isExportingItemPdf}
+                  >
+                    {isExportingItemPdf ? (
+                      <ActivityIndicator size="small" color="#DC143C" />
+                    ) : (
+                      <Ionicons name="document-text-outline" size={21} color="#DC143C" />
+                    )}
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={styles.modalPlaceholder} />
+              )}
             </View>
             
             {isTextViewModal && selectedItem?.text_content ? (
@@ -600,19 +902,55 @@ export default function ViewFolderScreen() {
               // Full screen image view
               selectedItem.output_text ? (
                 <View style={styles.twinContentView}>
-                  <Image
-                    source={{ uri: selectedItem.image_url }}
-                    style={styles.twinImage}
-                    resizeMode="contain"
-                  />
+                  {showItemPhoto && (
+                    <Image
+                      source={{ uri: selectedItem.image_url }}
+                      style={styles.twinImage}
+                      resizeMode="contain"
+                    />
+                  )}
                   <ScrollView
+                    ref={itemScrollRef}
                     style={styles.attachedOutputScroll}
                     contentContainerStyle={styles.attachedOutputContainer}
                     showsVerticalScrollIndicator={true}
                     indicatorStyle="black"
+                    onLayout={(e) => {
+                      itemScrollViewHeight.current = e.nativeEvent.layout.height;
+                      itemScrollRef.current?.measure((_fx, _fy, _w, _h, _px, py) => {
+                        itemScrollViewScreenY.current = py;
+                      });
+                    }}
+                    onScroll={(e) => {
+                      itemCurrentScrollY.current = e.nativeEvent.contentOffset.y;
+                    }}
+                    scrollEventThrottle={16}
+                    onScrollBeginDrag={() => {
+                      itemIsUserScrolling.current = true;
+                      if (itemUserScrollTimer.current) clearTimeout(itemUserScrollTimer.current);
+                      itemUserScrollTimer.current = setTimeout(() => {
+                        itemIsUserScrolling.current = false;
+                      }, 3000);
+                    }}
                   >
                     <Text style={styles.attachedOutputLabel}>Text output</Text>
-                    <Text style={styles.fullScreenText}>{selectedItem.output_text}</Text>
+                    <View style={styles.wordWrapContainer}>
+                      {selectedItem.output_text.split(/\s+/).filter(Boolean).map((word, idx) => {
+                        const isActive = isItemSpeechEnabled && itemSpeechWordIndex === idx;
+                        return (
+                          <Text
+                            key={idx}
+                            ref={(r) => {
+                              if (r) itemWordRefs.current.set(idx, r);
+                              else itemWordRefs.current.delete(idx);
+                            }}
+                            style={[styles.wordToken, isActive && styles.speechWordActive]}
+                          >
+                            {word}{' '}
+                          </Text>
+                        );
+                      })}
+                    </View>
                   </ScrollView>
                 </View>
               ) : (
@@ -763,28 +1101,43 @@ export default function ViewFolderScreen() {
       </Modal>
 
       {/* Rename Modal */}
-      <Modal visible={showRenameModal} transparent animationType="none" onRequestClose={() => setShowRenameModal(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.renameModalContent}>
-            <View style={styles.renameModalHeader}>
-              <Text style={styles.renameModalTitle}>Rename Item</Text>
-              <TouchableOpacity onPress={() => setShowRenameModal(false)}>
+      <Modal visible={showRenameModal} transparent animationType="fade" onRequestClose={() => setShowRenameModal(false)}>
+        <View style={styles.renameOverlay}>
+          <View style={styles.renameContent}>
+            <View style={styles.renameHeader}>
+              <Text style={styles.renameTitle}>Rename Item</Text>
+              <TouchableOpacity onPress={() => {
+                setShowRenameModal(false);
+                setRenamingItem(null);
+                setNewItemName('');
+              }}>
                 <Ionicons name="close" size={24} color="#8E8E93" />
               </TouchableOpacity>
             </View>
             <TextInput
               style={styles.renameInput}
-              placeholder="Enter new name"
+              placeholder="Item name"
               placeholderTextColor="#C7C7CC"
               value={newItemName}
               onChangeText={setNewItemName}
               autoFocus
+              onSubmitEditing={handleRenameItem}
             />
             <View style={styles.renameButtons}>
-              <TouchableOpacity style={styles.renameCancelBtn} onPress={() => setShowRenameModal(false)}>
+              <TouchableOpacity
+                style={[styles.renameBtn, styles.renameCancelBtn]}
+                onPress={() => {
+                  setShowRenameModal(false);
+                  setRenamingItem(null);
+                  setNewItemName('');
+                }}
+              >
                 <Text style={styles.renameCancelText}>Cancel</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.renameSaveBtn} onPress={handleRenameItem}>
+              <TouchableOpacity
+                style={[styles.renameBtn, styles.renameSaveBtn]}
+                onPress={handleRenameItem}
+              >
                 <Text style={styles.renameSaveText}>Save</Text>
               </TouchableOpacity>
             </View>
@@ -896,6 +1249,107 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     marginTop: 16,
   },
+  listContainer: {
+    paddingHorizontal: 16,
+    marginTop: 8,
+  },
+  listItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#F9F9FB',
+    borderRadius: 12,
+    marginBottom: 8,
+    gap: 12,
+  },
+  listThumbContainer: {
+    position: 'relative',
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  listThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+  },
+  listThumbPlaceholder: {
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    backgroundColor: '#FFF0F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  listInfo: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 3,
+  },
+  listItemName: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1A1A1A',
+  },
+  listItemSubtitle: {
+    fontSize: 12,
+    color: '#8E8E93',
+    lineHeight: 16,
+  },
+  listItemDate: {
+    fontSize: 12,
+    color: '#C7C7CC',
+  },
+  listMeta: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    gap: 4,
+    flexShrink: 0,
+  },
+  viewToggleButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    alignItems: 'center',
+    gap: 12,
+  },
+  searchBar: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
+    paddingBottom: 8,
+  },
+  searchIcon: {
+    marginRight: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 16,
+    color: '#1A1A1A',
+    paddingVertical: 0,
+  },
+  filterButton: {
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  filterButtonInner: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 20,
+  },
   row: {
     flexDirection: 'row',
     marginBottom: 16,
@@ -961,6 +1415,15 @@ const styles = StyleSheet.create({
     color: '#1A1A1A',
     textAlign: 'center',
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+  },
+  pencilIcon: {
+    opacity: 0.35,
+  },
   itemDate: {
     fontSize: 10,
     color: '#8E8E93',
@@ -1020,34 +1483,51 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFFFFF',
   },
-  modalClose: {
-    position: 'absolute',
-    top: 50,
-    right: 20,
-    zIndex: 10,
+  modalBackButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.1)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   modalHeader: {
-    position: 'absolute',
-    top: 50,
-    left: 20,
-    right: 80,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 12,
+    paddingHorizontal: 20,
+    paddingBottom: 12,
     zIndex: 10,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5EA',
   },
   modalHeaderTitle: {
+    flex: 1,
     color: '#1A1A1A', 
     fontSize: 16,
     fontWeight: '600',
-    opacity: 0.9,
+    textAlign: 'center',
+    paddingHorizontal: 8,
+  },
+  modalTtsButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalPlaceholder: {
+    width: 44,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
   },
   fullScreenImageView: {
     flex: 1,
-    paddingTop: 100,
+    paddingTop: 20,
     paddingBottom: 40,
   },
   fullScreenImageContent: {
@@ -1055,7 +1535,7 @@ const styles = StyleSheet.create({
   },
   twinContentView: {
     flex: 1,
-    paddingTop: 100,
+    paddingTop: 20,
     paddingBottom: 24,
   },
   twinImage: {
@@ -1124,7 +1604,7 @@ const styles = StyleSheet.create({
   combinedOutputHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
     marginBottom: 18,
   },
   combinedOutputBackButton: {
@@ -1137,11 +1617,11 @@ const styles = StyleSheet.create({
   },
   combinedOutputTitle: {
     flex: 1,
-    marginRight: 8,
+    marginLeft: 4,
     color: '#1A1A1A',
     fontSize: 18,
     fontWeight: '600',
-    textAlign: 'right',
+    textAlign: 'left',
   },
   combinedOptionsRow: {
     flexDirection: 'row',
@@ -1179,19 +1659,26 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     backgroundColor: '#FFFFFF',
   },
-  renameModalContent: {
+  renameOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  renameContent: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+    borderRadius: 16,
     padding: 20,
     width: '85%',
+    maxWidth: 340,
   },
-  renameModalHeader: {
+  renameHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 20,
   },
-  renameModalTitle: {
+  renameTitle: {
     fontSize: 18,
     fontWeight: '600',
     color: '#1A1A1A',
@@ -1209,11 +1696,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
   },
-  renameCancelBtn: {
+  renameBtn: {
     flex: 1,
     paddingVertical: 12,
     borderRadius: 10,
     alignItems: 'center',
+  },
+  renameCancelBtn: {
     backgroundColor: '#F5F5F5',
   },
   renameCancelText: {
@@ -1222,10 +1711,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   renameSaveBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: 'center',
     backgroundColor: '#DC143C',
   },
   renameSaveText: {

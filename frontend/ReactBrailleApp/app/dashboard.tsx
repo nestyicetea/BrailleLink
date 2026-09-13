@@ -1,18 +1,29 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Image } from 'react-native';
 import { useState, useCallback, useEffect } from 'react';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AxiosInstance from '../axios';
 
-
+interface RecentImage {
+  image_id: number;
+  image_name: string;
+  image_path: string;
+  output_text: string;
+  created_at: string;
+  folder?: {
+    folder_id: number;
+    folder_name: string;
+  };
+}
 
 export default function DashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({ folders: 0, images: 0, todayScans: 0, storageMB: 0 });
+  const [recentImages, setRecentImages] = useState<RecentImage[]>([]);
 
   useEffect(() => {
     loadStats();
-    // startNewGame();
+    loadRecentActivity();
   }, []);
 
   const loadStats = async () => {
@@ -22,7 +33,8 @@ export default function DashboardScreen() {
       
       const today = new Date().toISOString().split('T')[0];
       const todayScans = imagesRes.data?.images?.filter((img: { created_at?: string }) => img.created_at?.startsWith(today)).length || 0;
-      const storageMB = (imagesRes.data?.images?.length * 0.5).toFixed(1);
+      const totalBytes = imagesRes.data?.images?.reduce((sum: number, img: { file_size?: number }) => sum + (img.file_size || 0), 0) || 0;
+      const storageMB = (totalBytes / (1024 * 1024)).toFixed(1);
       
       setStats({
         folders: foldersRes.data?.folders?.length || 0,
@@ -35,19 +47,59 @@ export default function DashboardScreen() {
     }
   };
 
+  const loadRecentActivity = async () => {
+    try {
+      const [imagesRes, foldersRes] = await Promise.all([
+        AxiosInstance.get('/images/'),
+        AxiosInstance.get('/folders/')
+      ]);
+      
+      const images = imagesRes.data?.images || [];
+      const folders = foldersRes.data?.folders || [];
+      
+      // Create a folder map for quick lookup
+      const folderMap = new Map(folders.map((f: any) => [f.folder_id, f]));
+      
+      // Enrich images with folder info
+      const enrichedImages = images.map((img: any) => ({
+        ...img,
+        folder: img.folder ? folderMap.get(img.folder) : undefined
+      }));
+      
+      // Sort by created_at and take the 5 most recent
+      const sorted = enrichedImages.sort((a: RecentImage, b: RecentImage) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      
+      setRecentImages(sorted.slice(0, 5));
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadStats();
+    await Promise.all([loadStats(), loadRecentActivity()]);
     setRefreshing(false);
   }, []);
 
-  
+  const formatTimeAgo = (dateString: string) => {
+    const now = new Date();
+    const date = new Date(dateString);
+    const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+    
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    if (seconds < 604800) return `${Math.floor(seconds / 86400)}d ago`;
+    return date.toLocaleDateString();
+  };
 
   return (
     <ScrollView 
       style={styles.container}
       showsVerticalScrollIndicator={false}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#999" />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#8E8E93" />}
     >
       {/* Main Stats Row */}
       <View style={styles.statsRow}>
@@ -77,16 +129,84 @@ export default function DashboardScreen() {
         </View>
       </View>
 
-      {/* Quick Actions */}
-      <View style={styles.actionsRow}>
-        <TouchableOpacity style={styles.actionChip} onPress={() => router.push('/camera')}>
-          <Ionicons name="camera-outline" size={18} color="#DC143C" />
-          <Text style={styles.actionChipText}>Scan</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionChip} onPress={() => router.push('/files')}>
-          <Ionicons name="folder-outline" size={18} color="#DC143C" />
-          <Text style={styles.actionChipText}>Files</Text>
-        </TouchableOpacity>
+      {/* Recent Activity */}
+      <View style={styles.recentSection}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Recent Activity</Text>
+          {recentImages.length > 0 && (
+            <TouchableOpacity onPress={() => router.push('/recents')}>
+              <Text style={styles.seeAllText}>See All</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {recentImages.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Ionicons name="document-text-outline" size={48} color="#E5E5EA" />
+            <Text style={styles.emptyStateText}>No scans yet</Text>
+            <Text style={styles.emptyStateSubtext}>Start scanning Braille documents</Text>
+            <TouchableOpacity 
+              style={styles.emptyStateButton}
+              onPress={() => router.push('/camera')}
+            >
+              <Ionicons name="camera" size={18} color="#fff" />
+              <Text style={styles.emptyStateButtonText}>Start Scanning</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.activityList}>
+            {recentImages.map((image) => (
+              <TouchableOpacity
+                key={image.image_id}
+                style={styles.activityItem}
+                onPress={async () => {
+                  if (image.folder) {
+                    // Navigate to the folder containing this image
+                    try {
+                      const folderRes = await AxiosInstance.get(`/folders/${image.folder.folder_id}/`);
+                      router.push({
+                        pathname: '/view-folder',
+                        params: { 
+                          folderId: image.folder.folder_id, 
+                          folderName: image.folder.folder_name || folderRes.data?.folder_name
+                        }
+                      });
+                    } catch (error) {
+                      console.error('Error navigating to folder:', error);
+                      router.push('/files');
+                    }
+                  } else {
+                    router.push('/files');
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={styles.activityIcon}>
+                  <Ionicons name="document-text" size={20} color="#DC143C" />
+                </View>
+                
+                <View style={styles.activityContent}>
+                  <Text style={styles.activityTitle} numberOfLines={1}>
+                    {image.image_name || 'Untitled'}
+                  </Text>
+                  <Text style={styles.activitySubtitle} numberOfLines={1}>
+                    {image.output_text ? 
+                      `${image.output_text.substring(0, 40)}${image.output_text.length > 40 ? '...' : ''}` : 
+                      'No text extracted'
+                    }
+                  </Text>
+                </View>
+
+                <View style={styles.activityMeta}>
+                  <Text style={styles.activityTime}>
+                    {formatTimeAgo(image.created_at)}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
       </View>
 
       {/* Braille Game - Commented Out */}
@@ -180,97 +300,102 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#8E8E93',
   },
-  actionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 0,
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#E5E5EA',
+  recentSection: {
+    paddingTop: 20,
+    paddingHorizontal: 16,
+    paddingBottom: 20,
   },
-  actionChip: {
+  sectionHeader: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 0.5,
-    borderColor: '#E5E5EA',
+    marginBottom: 16,
   },
-  actionChipText: {
-    fontSize: 13,
+  sectionTitle: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    letterSpacing: -0.4,
+  },
+  seeAllText: {
+    fontSize: 14,
     color: '#DC143C',
     fontWeight: '500',
   },
-  // Braille game styles - commented out
-  // gameContainer: {
-  //   padding: 20,
-  // },
-  // gameHeader: {
-  //   marginBottom: 16,
-  // },
-  // gameTitle: {
-  //   fontSize: 13,
-  //   fontWeight: '500',
-  //   color: '#8E8E93',
-  //   textTransform: 'uppercase',
-  //   letterSpacing: 0.8,
-  // },
-  // gameCard: {
-  //   alignItems: 'center',
-  //   paddingVertical: 32,
-  //   paddingHorizontal: 20,
-  //   borderRadius: 16,
-  //   backgroundColor: '#F9F9FB',
-  // },
-  // brailleCell: {
-  //   flexDirection: 'row',
-  //   justifyContent: 'center',
-  //   marginBottom: 28,
-  // },
-  // dot: {
-  //   width: 14,
-  //   height: 14,
-  //   borderRadius: 7,
-  //   backgroundColor: '#E5E5EA',
-  //   marginVertical: 5,
-  // },
-  // dotActive: {
-  //   backgroundColor: '#1A1A1A',
-  // },
-  // optionsRow: {
-  //   flexDirection: 'row',
-  //   flexWrap: 'wrap',
-  //   justifyContent: 'center',
-  //   gap: 12,
-  //   marginBottom: 20,
-  // },
-  // optionBtn: {
-  //   width: 56,
-  //   height: 56,
-  //   borderRadius: 28,
-  //   backgroundColor: '#FFFFFF',
-  //   alignItems: 'center',
-  //   justifyContent: 'center',
-  //   borderWidth: 0.5,
-  //   borderColor: '#E5E5EA',
-  // },
-  // optionLetter: {
-  //   fontSize: 22,
-  //   fontWeight: '400',
-  //   color: '#1A1A1A',
-  // },
-  // feedback: {
-  //   fontSize: 13,
-  //   fontWeight: '500',
-  //   marginTop: 8,
-  // },
-  // feedbackCorrect: {
-  //   color: '#4CAF50',
-  // },
-  // feedbackWrong: {
-  //   color: '#FF6B6B',
-  // },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 40,
+    paddingHorizontal: 20,
+  },
+  emptyStateText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    marginTop: 12,
+  },
+  emptyStateSubtext: {
+    fontSize: 13,
+    color: '#8E8E93',
+    marginTop: 4,
+  },
+  emptyStateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#DC143C',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginTop: 20,
+  },
+  emptyStateButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  activityList: {
+    gap: 0,
+  },
+  activityItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    backgroundColor: '#F8F8F8',
+    borderRadius: 12,
+    marginBottom: 8,
+  },
+  activityIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFE8EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  activityContent: {
+    flex: 1,
+    marginRight: 8,
+  },
+  activityTitle: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#1A1A1A',
+    marginBottom: 2,
+  },
+  activitySubtitle: {
+    fontSize: 13,
+    color: '#8E8E93',
+  },
+  activityMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  activityTime: {
+    fontSize: 12,
+    color: '#C7C7CC',
+    fontWeight: '500',
+  },
 });
