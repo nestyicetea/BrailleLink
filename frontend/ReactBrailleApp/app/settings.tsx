@@ -54,6 +54,25 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* Display Section */}
+        <Text style={styles.sectionHeader}>Display</Text>
+        <View style={styles.section}>
+          <TouchableOpacity
+            style={styles.row}
+            onPress={() => router.push('/display')}
+            activeOpacity={0.7}
+          >
+            <View style={styles.rowLeft}>
+              <Ionicons name="text-outline" size={20} color="#DC143C" style={styles.rowIcon} />
+              <View>
+                <Text style={styles.rowTitle}>Font Size</Text>
+                <Text style={styles.rowSubtitle}>Adjust the app text size</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#C7C7CC" />
+          </TouchableOpacity>
+        </View>
+
         {/* Storage Section */}
         <Text style={styles.sectionHeader}>Storage</Text>
         <View style={styles.section}>

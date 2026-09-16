@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import AxiosInstance from '../axios';
 import { synthesizeSpeech, playWithHighlights } from '../utils/azureTts';
 import * as Print from 'expo-print';
+import { useDisplay } from '../context/DisplayContext';
 
 const { width, height } = Dimensions.get('window');
 const COLUMN_WIDTH = (width - 48) / 3;
@@ -25,6 +26,7 @@ interface ImageItem {
 
 export default function ViewFolderScreen() {
   const { folderId, folderName } = useLocalSearchParams();
+  const { fontScale, fontWeight } = useDisplay();
   const [refreshing, setRefreshing] = useState(false);
   const [images, setImages] = useState<ImageItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -895,7 +897,18 @@ export default function ViewFolderScreen() {
                   showsVerticalScrollIndicator={true}
                   indicatorStyle="black"
                 >
-                  <Text style={styles.fullScreenText}>{selectedItem.text_content}</Text>
+                  <Text
+                    style={[
+                      styles.fullScreenText,
+                      {
+                        fontSize: 16 * fontScale,
+                        lineHeight: 26 * fontScale,
+                        fontWeight: fontWeight.toString() as any,
+                      },
+                    ]}
+                  >
+                    {selectedItem.text_content}
+                  </Text>
                 </ScrollView>
               </View>
             ) : selectedItem?.image_url && !selectedItem.is_text ? (
@@ -944,7 +957,15 @@ export default function ViewFolderScreen() {
                               if (r) itemWordRefs.current.set(idx, r);
                               else itemWordRefs.current.delete(idx);
                             }}
-                            style={[styles.wordToken, isActive && styles.speechWordActive]}
+                            style={[
+                              styles.wordToken,
+                              {
+                                fontSize: 16 * fontScale,
+                                lineHeight: 26 * fontScale,
+                                fontWeight: fontWeight.toString() as any,
+                              },
+                              isActive && styles.speechWordActive,
+                            ]}
                           >
                             {word}{' '}
                           </Text>
@@ -1084,7 +1105,15 @@ export default function ViewFolderScreen() {
                                 if (r) wordRefs.current.set(globalIdx, r);
                                 else wordRefs.current.delete(globalIdx);
                               }}
-                              style={[styles.wordToken, isActive && styles.speechWordActive]}
+                              style={[
+                                styles.wordToken,
+                                {
+                                  fontSize: 16 * fontScale,
+                                  lineHeight: 26 * fontScale,
+                                  fontWeight: fontWeight.toString() as any,
+                                },
+                                isActive && styles.speechWordActive,
+                              ]}
                             >
                               {word}{' '}
                             </Text>

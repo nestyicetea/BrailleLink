@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, Alert, Image } from 'react-native';
 import { useState, useCallback, useEffect } from 'react';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,6 +10,7 @@ interface DeletedItem {
   name: string;
   deleted_at: string;
   folder_name?: string;
+  image_url?: string;
 }
 
 export default function RecentlyDeletedScreen() {
@@ -41,6 +42,7 @@ export default function RecentlyDeletedScreen() {
         name: img.image_name || 'Untitled',
         deleted_at: img.deleted_at,
         folder_name: img.folder?.folder_name,
+        image_url: img.image_url,
       }));
 
       const allItems = [...deletedFolders, ...deletedImages].sort(
@@ -197,13 +199,23 @@ export default function RecentlyDeletedScreen() {
             </Text>
             {items.map((item) => (
               <View key={`${item.type}-${item.id}`} style={styles.item}>
-                <View style={styles.iconWrap}>
-                  <Ionicons 
-                    name={item.type === 'folder' ? 'folder' : 'document-text'} 
-                    size={20} 
-                    color="#DC143C" 
-                  />
-                </View>
+                {item.type === 'folder' ? (
+                  <View style={styles.iconWrap}>
+                    <Ionicons name="folder" size={20} color="#DC143C" />
+                  </View>
+                ) : (
+                  <View style={styles.imageWrap}>
+                    {item.image_url ? (
+                      <Image 
+                        source={{ uri: item.image_url }} 
+                        style={styles.thumbnail}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <Ionicons name="document-text" size={20} color="#DC143C" />
+                    )}
+                  </View>
+                )}
 
                 <View style={styles.itemContent}>
                   <Text style={styles.itemTitle} numberOfLines={1}>
@@ -288,6 +300,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
+  },
+  imageWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#F8F8F8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    overflow: 'hidden',
+  },
+  thumbnail: {
+    width: 40,
+    height: 40,
   },
   itemContent: { flex: 1, marginRight: 8 },
   itemTitle: { fontSize: 15, fontWeight: '500', color: '#1A1A1A', marginBottom: 2 },

@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity, TextInput, Image } from 'react-native';
 import { useState, useCallback, useEffect } from 'react';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import AxiosInstance from '../axios';
 interface RecentImage {
   image_id: number;
   image_name: string;
+  image_url?: string;
   output_text: string;
   created_at: string;
   folder?: {
@@ -183,9 +184,19 @@ export default function RecentsScreen() {
                   onPress={() => handlePress(image)}
                   activeOpacity={0.7}
                 >
-                  <View style={styles.iconWrap}>
-                    <Ionicons name="document-text" size={20} color="#DC143C" />
-                  </View>
+                  {image.image_url ? (
+                    <View style={styles.imageWrap}>
+                      <Image 
+                        source={{ uri: image.image_url }} 
+                        style={styles.thumbnail}
+                        resizeMode="cover"
+                      />
+                    </View>
+                  ) : (
+                    <View style={styles.iconWrap}>
+                      <Ionicons name="document-text" size={20} color="#DC143C" />
+                    </View>
+                  )}
 
                   <View style={styles.itemContent}>
                     <Text style={styles.itemTitle} numberOfLines={1}>
@@ -289,6 +300,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
+  },
+  imageWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#F8F8F8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    overflow: 'hidden',
+  },
+  thumbnail: {
+    width: 40,
+    height: 40,
   },
   itemContent: { flex: 1, marginRight: 8 },
   itemTitle: { fontSize: 15, fontWeight: '500', color: '#1A1A1A', marginBottom: 2 },

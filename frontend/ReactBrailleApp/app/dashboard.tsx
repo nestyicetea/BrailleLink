@@ -8,6 +8,7 @@ interface RecentImage {
   image_id: number;
   image_name: string;
   image_path: string;
+  image_url?: string;
   output_text: string;
   created_at: string;
   folder?: {
@@ -181,9 +182,19 @@ export default function DashboardScreen() {
                 }}
                 activeOpacity={0.7}
               >
-                <View style={styles.activityIcon}>
-                  <Ionicons name="document-text" size={20} color="#DC143C" />
-                </View>
+                {image.image_url ? (
+                  <View style={styles.activityImageWrap}>
+                    <Image 
+                      source={{ uri: image.image_url }} 
+                      style={styles.activityThumbnail}
+                      resizeMode="cover"
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.activityIcon}>
+                    <Ionicons name="document-text" size={20} color="#DC143C" />
+                  </View>
+                )}
                 
                 <View style={styles.activityContent}>
                   <Text style={styles.activityTitle} numberOfLines={1}>
@@ -373,6 +384,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
+  },
+  activityImageWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: '#F8F8F8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    overflow: 'hidden',
+  },
+  activityThumbnail: {
+    width: 40,
+    height: 40,
   },
   activityContent: {
     flex: 1,

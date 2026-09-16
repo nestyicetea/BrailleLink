@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View } from 'react-native';
 import TopNav from './includes/topNav';
 import BottomTabs from './includes/bottomTabs';
+import { DisplayProvider } from '../context/DisplayContext';
 
 export default function RootLayout() {
   const pathname = usePathname();
@@ -12,9 +13,11 @@ export default function RootLayout() {
     pathname.startsWith('/view-folder') ||
     pathname === '/settings' ||
     pathname === '/recents' ||
-    pathname === '/recently-deleted';
+    pathname === '/recently-deleted' ||
+    pathname === '/display';
 
   return (
+    <DisplayProvider>
     <View style={{ flex: 1 }}>
       {!hideNavigationChrome && <TopNav />}
       <View style={{ flex: 1 }}>
@@ -23,5 +26,6 @@ export default function RootLayout() {
       {!hideNavigationChrome && <BottomTabs />}
       <StatusBar style="auto" />
     </View>
+    </DisplayProvider>
   );
 }
