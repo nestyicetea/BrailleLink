@@ -26,7 +26,7 @@ interface ImageItem {
 
 export default function ViewFolderScreen() {
   const { folderId, folderName } = useLocalSearchParams();
-  const { fontScale, fontWeight } = useDisplay();
+  const { fontScale, fontWeight, theme } = useDisplay();
   const [refreshing, setRefreshing] = useState(false);
   const [images, setImages] = useState<ImageItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -700,26 +700,26 @@ export default function ViewFolderScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Loading contents...</Text>
+      <View style={[styles.loadingContainer, { backgroundColor: theme.background }]}>
+        <Text style={[styles.loadingText, { color: theme.textMuted }]}>Loading contents...</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          <Ionicons name="arrow-back" size={24} color={theme.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{folderName || 'Folder'}</Text>
+        <Text style={[styles.headerTitle, { color: theme.text }]}>{folderName || 'Folder'}</Text>
         {isSelectionMode ? (
           <TouchableOpacity onPress={() => {
             setIsSelectionMode(false);
             setSelectedImages([]);
           }} style={styles.cancelButton}>
-            <Text style={styles.cancelButtonText}>Cancel</Text>
+            <Text style={[styles.cancelButtonText, { color: theme.accent }]}>Cancel</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
@@ -729,20 +729,20 @@ export default function ViewFolderScreen() {
             <Ionicons
               name={viewMode === 'grid' ? 'list-outline' : 'grid-outline'}
               size={22}
-              color="#1A1A1A"
+              color={theme.text}
             />
           </TouchableOpacity>
         )}
       </View>
 
       {/* Stats Bar with Selection Actions */}
-      <View style={styles.statsBar}>
+      <View style={[styles.statsBar, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
         {isSelectionMode ? (
           <View style={styles.selectionActions}>
-            <Text style={styles.statsText}>{selectedImages.length} selected</Text>
+            <Text style={[styles.statsText, { color: theme.textMuted }]}>{selectedImages.length} selected</Text>
             <View style={styles.selectionButtons}>
               <TouchableOpacity onPress={handleCopySelected} style={styles.selectionActionBtn}>
-                <Ionicons name="albums-outline" size={20} color="#DC143C" />
+                <Ionicons name="albums-outline" size={20} color={theme.accent} />
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => exportCombinedPdf('selected', true)}
@@ -751,27 +751,27 @@ export default function ViewFolderScreen() {
                 disabled={isExportingPdf}
               >
                 {isExportingPdf ? (
-                  <ActivityIndicator size="small" color="#DC143C" />
+                  <ActivityIndicator size="small" color={theme.accent} />
                 ) : (
-                  <Ionicons name="document-text-outline" size={20} color="#DC143C" />
+                  <Ionicons name="document-text-outline" size={20} color={theme.accent} />
                 )}
               </TouchableOpacity>
               <TouchableOpacity onPress={handleDeleteSelected} style={styles.selectionActionBtn}>
-                <Ionicons name="trash-outline" size={20} color="#DC143C" />
+                <Ionicons name="trash-outline" size={20} color={theme.accent} />
               </TouchableOpacity>
             </View>
           </View>
         ) : (
           <>
-            <Text style={styles.statsText}>{images.length} items</Text>
-            <Text style={styles.statsDate}>Created: {formatDate(folderInfo?.created_at)}</Text>
+            <Text style={[styles.statsText, { color: theme.textMuted }]}>{images.length} items</Text>
+            <Text style={[styles.statsDate, { color: theme.textMuted }]}>Created: {formatDate(folderInfo?.created_at)}</Text>
             {folderOutputItems.length > 0 ? (
               <TouchableOpacity
-                style={styles.allOutputsButton}
+                style={[styles.allOutputsButton, { borderColor: theme.accent }]}
                 onPress={() => openCombinedOutputs('all')}
                 accessibilityLabel="View all outputs"
               >
-                <Ionicons name="albums-outline" size={18} color="#DC143C" />
+                <Ionicons name="albums-outline" size={18} color={theme.accent} />
               </TouchableOpacity>
             ) : null}
           </>
@@ -838,14 +838,14 @@ export default function ViewFolderScreen() {
 
       {/* View Modal - Full screen for both images and text */}
       <Modal visible={showViewModal} transparent animationType="none" onRequestClose={closeViewModal}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+        <View style={[styles.modalOverlay, { backgroundColor: theme.background }]}>
+          <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
             {/* Header with Back Button, TTS, Image Toggle, PDF */}
-            <View style={styles.modalHeader}>
+            <View style={[styles.modalHeader, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
               <TouchableOpacity style={styles.modalBackButton} onPress={closeViewModal}>
-                <Ionicons name="chevron-back" size={28} color="#1A1A1A" />
+                <Ionicons name="chevron-back" size={28} color={theme.text} />
               </TouchableOpacity>
-              <Text style={styles.modalHeaderTitle} numberOfLines={1}>
+              <Text style={[styles.modalHeaderTitle, { color: theme.text }]} numberOfLines={1}>
                 {selectedItem?.image_name || 'Unnamed'}
                 {selectedItem?.is_text ? '.txt' : ''}
               </Text>
@@ -853,33 +853,33 @@ export default function ViewFolderScreen() {
                 <View style={styles.modalActions}>
                   <TouchableOpacity
                     onPress={() => setIsItemSpeechEnabled(!isItemSpeechEnabled)}
-                    style={styles.combinedIconToggle}
+                    style={[styles.combinedIconToggle, { borderColor: theme.border, backgroundColor: theme.surface }]}
                   >
                     <Ionicons
                       name={isItemSpeechPlaying ? 'pause' : 'play'}
                       size={21}
-                      color={isItemSpeechPlaying ? '#DC143C' : '#8E8E93'}
+                      color={isItemSpeechPlaying ? theme.accent : theme.textMuted}
                     />
                   </TouchableOpacity>
                   <TouchableOpacity
                     onPress={() => setShowItemPhoto(v => !v)}
-                    style={styles.combinedIconToggle}
+                    style={[styles.combinedIconToggle, { borderColor: theme.border, backgroundColor: theme.surface }]}
                   >
                     <Ionicons
                       name={showItemPhoto ? 'image' : 'image-outline'}
                       size={21}
-                      color={showItemPhoto ? '#DC143C' : '#8E8E93'}
+                      color={showItemPhoto ? theme.accent : theme.textMuted}
                     />
                   </TouchableOpacity>
                   <TouchableOpacity
                     onPress={exportItemPdf}
-                    style={styles.combinedIconToggle}
+                    style={[styles.combinedIconToggle, { borderColor: theme.border, backgroundColor: theme.surface }]}
                     disabled={isExportingItemPdf}
                   >
                     {isExportingItemPdf ? (
-                      <ActivityIndicator size="small" color="#DC143C" />
+                      <ActivityIndicator size="small" color={theme.accent} />
                     ) : (
-                      <Ionicons name="document-text-outline" size={21} color="#DC143C" />
+                      <Ionicons name="document-text-outline" size={21} color={theme.accent} />
                     )}
                   </TouchableOpacity>
                 </View>
@@ -895,7 +895,7 @@ export default function ViewFolderScreen() {
                   style={styles.fullScreenTextScroll} 
                   contentContainerStyle={styles.fullScreenTextContent}
                   showsVerticalScrollIndicator={true}
-                  indicatorStyle="black"
+                  indicatorStyle={theme.background === '#121212' ? 'white' : 'black'}
                 >
                   <Text
                     style={[
@@ -904,6 +904,7 @@ export default function ViewFolderScreen() {
                         fontSize: 16 * fontScale,
                         lineHeight: 26 * fontScale,
                         fontWeight: fontWeight.toString() as any,
+                        color: theme.text,
                       },
                     ]}
                   >
@@ -924,10 +925,10 @@ export default function ViewFolderScreen() {
                   )}
                   <ScrollView
                     ref={itemScrollRef}
-                    style={styles.attachedOutputScroll}
+                    style={[styles.attachedOutputScroll, { backgroundColor: theme.surface }]}
                     contentContainerStyle={styles.attachedOutputContainer}
                     showsVerticalScrollIndicator={true}
-                    indicatorStyle="black"
+                    indicatorStyle={theme.background === '#121212' ? 'white' : 'black'}
                     onLayout={(e) => {
                       itemScrollViewHeight.current = e.nativeEvent.layout.height;
                       itemScrollRef.current?.measure((_fx, _fy, _w, _h, _px, py) => {
@@ -946,7 +947,7 @@ export default function ViewFolderScreen() {
                       }, 3000);
                     }}
                   >
-                    <Text style={styles.attachedOutputLabel}>Text output</Text>
+                    <Text style={[styles.attachedOutputLabel, { color: theme.accent }]}>Text output</Text>
                     <View style={styles.wordWrapContainer}>
                       {selectedItem.output_text.split(/\s+/).filter(Boolean).map((word, idx) => {
                         const isActive = isItemSpeechEnabled && itemSpeechWordIndex === idx;
@@ -963,8 +964,9 @@ export default function ViewFolderScreen() {
                                 fontSize: 16 * fontScale,
                                 lineHeight: 26 * fontScale,
                                 fontWeight: fontWeight.toString() as any,
+                                color: theme.text,
                               },
-                              isActive && styles.speechWordActive,
+                              isActive && { backgroundColor: theme.highlight, color: theme.text },
                             ]}
                           >
                             {word}{' '}
@@ -997,62 +999,62 @@ export default function ViewFolderScreen() {
         animationType="slide"
         onRequestClose={closeCombinedOutputModal}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.combinedOutputModalContent}>
+        <View style={[styles.modalOverlay, { backgroundColor: theme.background }]}>
+          <View style={[styles.combinedOutputModalContent, { backgroundColor: theme.background }]}>
             <View style={styles.combinedOutputHeader}>
               <TouchableOpacity
                 onPress={closeCombinedOutputModal}
                 style={styles.combinedOutputBackButton}
                 accessibilityLabel="Back to folder"
               >
-                <Ionicons name="chevron-back" size={28} color="#1A1A1A" />
+                <Ionicons name="chevron-back" size={28} color={theme.text} />
               </TouchableOpacity>
-              <Text style={styles.combinedOutputTitle}>{folderName || 'Folder'}</Text>
+              <Text style={[styles.combinedOutputTitle, { color: theme.text }]}>{folderName || 'Folder'}</Text>
               <View style={styles.combinedOptionsRow}>
                 <TouchableOpacity
                   onPress={() => {
                     setIsCombinedSpeechEnabled((enabled) => !enabled);
                   }}
-                  style={styles.combinedIconToggle}
+                  style={[styles.combinedIconToggle, { borderColor: theme.border, backgroundColor: theme.surface }]}
                   accessibilityLabel={isSpeechPlaying ? 'Pause speech' : 'Play speech'}
                 >
                   <Ionicons
                     name={isSpeechPlaying ? 'pause' : 'play'}
                     size={21}
-                    color={isSpeechPlaying ? '#DC143C' : '#8E8E93'}
+                    color={isSpeechPlaying ? theme.accent : theme.textMuted}
                   />
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={() => setShowCombinedPhotos((visible) => !visible)}
-                  style={styles.combinedIconToggle}
+                  style={[styles.combinedIconToggle, { borderColor: theme.border, backgroundColor: theme.surface }]}
                   accessibilityLabel={showCombinedPhotos ? 'Hide photos' : 'Show photos'}
                 >
                   <Ionicons
                     name={showCombinedPhotos ? 'image' : 'image-outline'}
                     size={21}
-                    color={showCombinedPhotos ? '#DC143C' : '#8E8E93'}
+                    color={showCombinedPhotos ? theme.accent : theme.textMuted}
                   />
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={() => exportCombinedPdf()}
-                  style={styles.combinedIconToggle}
+                  style={[styles.combinedIconToggle, { borderColor: theme.border, backgroundColor: theme.surface }]}
                   accessibilityLabel="Save outputs as PDF"
                   disabled={isExportingPdf}
                 >
                   {isExportingPdf ? (
-                    <ActivityIndicator size="small" color="#DC143C" />
+                    <ActivityIndicator size="small" color={theme.accent} />
                   ) : (
-                    <Ionicons name="document-text-outline" size={21} color="#DC143C" />
+                    <Ionicons name="document-text-outline" size={21} color={theme.accent} />
                   )}
                 </TouchableOpacity>
               </View>
             </View>
             <ScrollView
               ref={combinedScrollRef}
-              style={styles.combinedOutputScroll}
+              style={[styles.combinedOutputScroll, { backgroundColor: theme.surface }]}
               contentContainerStyle={styles.combinedOutputContent}
               showsVerticalScrollIndicator
-              indicatorStyle="black"
+              indicatorStyle={theme.background === '#121212' ? 'white' : 'black'}
               onLayout={(e) => {
                 scrollViewHeight.current = e.nativeEvent.layout.height;
                 // Capture screen Y of the ScrollView
@@ -1085,12 +1087,12 @@ export default function ViewFolderScreen() {
                   return (
                     <View
                       key={itemId}
-                      style={styles.combinedOutputItem}
+                      style={[styles.combinedOutputItem, { borderBottomColor: theme.border }]}
                     >
                       {showCombinedPhotos && item.image_url ? (
                         <Image
                           source={{ uri: item.image_url }}
-                          style={styles.combinedOutputImage}
+                          style={[styles.combinedOutputImage, { backgroundColor: theme.background }]}
                           resizeMode="contain"
                         />
                       ) : null}
@@ -1111,8 +1113,9 @@ export default function ViewFolderScreen() {
                                   fontSize: 16 * fontScale,
                                   lineHeight: 26 * fontScale,
                                   fontWeight: fontWeight.toString() as any,
+                                  color: theme.text,
                                 },
-                                isActive && styles.speechWordActive,
+                                isActive && { backgroundColor: theme.highlight, color: theme.text },
                               ]}
                             >
                               {word}{' '}
@@ -1132,21 +1135,21 @@ export default function ViewFolderScreen() {
       {/* Rename Modal */}
       <Modal visible={showRenameModal} transparent animationType="fade" onRequestClose={() => setShowRenameModal(false)}>
         <View style={styles.renameOverlay}>
-          <View style={styles.renameContent}>
+          <View style={[styles.renameContent, { backgroundColor: theme.background }]}>
             <View style={styles.renameHeader}>
-              <Text style={styles.renameTitle}>Rename Item</Text>
+              <Text style={[styles.renameTitle, { color: theme.text }]}>Rename Item</Text>
               <TouchableOpacity onPress={() => {
                 setShowRenameModal(false);
                 setRenamingItem(null);
                 setNewItemName('');
               }}>
-                <Ionicons name="close" size={24} color="#8E8E93" />
+                <Ionicons name="close" size={24} color={theme.textMuted} />
               </TouchableOpacity>
             </View>
             <TextInput
-              style={styles.renameInput}
+              style={[styles.renameInput, { borderColor: theme.border, color: theme.text, backgroundColor: theme.surface }]}
               placeholder="Item name"
-              placeholderTextColor="#C7C7CC"
+              placeholderTextColor={theme.textMuted}
               value={newItemName}
               onChangeText={setNewItemName}
               autoFocus
@@ -1154,17 +1157,17 @@ export default function ViewFolderScreen() {
             />
             <View style={styles.renameButtons}>
               <TouchableOpacity
-                style={[styles.renameBtn, styles.renameCancelBtn]}
+                style={[styles.renameBtn, styles.renameCancelBtn, { backgroundColor: theme.surface }]}
                 onPress={() => {
                   setShowRenameModal(false);
                   setRenamingItem(null);
                   setNewItemName('');
                 }}
               >
-                <Text style={styles.renameCancelText}>Cancel</Text>
+                <Text style={[styles.renameCancelText, { color: theme.textMuted }]}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.renameBtn, styles.renameSaveBtn]}
+                style={[styles.renameBtn, styles.renameSaveBtn, { backgroundColor: theme.accent }]}
                 onPress={handleRenameItem}
               >
                 <Text style={styles.renameSaveText}>Save</Text>
@@ -1180,17 +1183,14 @@ export default function ViewFolderScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
   },
   loadingText: {
     fontSize: 14,
-    color: '#8E8E93',
   },
   header: {
     flexDirection: 'row',
@@ -1199,9 +1199,7 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingBottom: 15,
     paddingHorizontal: 20,
-    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
   },
   backButton: {
     width: 40,
@@ -1213,7 +1211,6 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#1A1A1A',
   },
   placeholder: {
     width: 40,
@@ -1223,7 +1220,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   cancelButtonText: {
-    color: '#DC143C',
     fontSize: 14,
     fontWeight: '500',
   },
@@ -1233,18 +1229,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 12,
-    backgroundColor: '#F8F8F8',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
   },
   statsText: {
     fontSize: 13,
-    color: '#8E8E93',
     fontWeight: '500',
   },
   statsDate: {
     fontSize: 12,
-    color: '#8E8E93',
   },
   allOutputsButton: {
     flexDirection: 'row',
@@ -1506,11 +1498,9 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
   },
   modalContent: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
   },
   modalBackButton: {
     width: 44,
@@ -1527,13 +1517,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 12,
     zIndex: 10,
-    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
   },
   modalHeaderTitle: {
     flex: 1,
-    color: '#1A1A1A', 
     fontSize: 16,
     fontWeight: '600',
     textAlign: 'center',
@@ -1574,7 +1561,6 @@ const styles = StyleSheet.create({
   attachedOutputScroll: {
     flex: 1,
     marginHorizontal: 24,
-    backgroundColor: '#F7F7F7',
     borderRadius: 8,
   },
   fullScreenImage: {
@@ -1587,7 +1573,6 @@ const styles = StyleSheet.create({
   },
   attachedOutputLabel: {
     marginBottom: 8,
-    color: '#DC143C',
     fontSize: 14,
     fontWeight: '700',
   },
@@ -1605,12 +1590,10 @@ const styles = StyleSheet.create({
   },
   fullScreenText: {
     fontSize: 16,
-    color: '#1A1A1A',
     fontFamily: 'monospace',
     lineHeight: 26,
   },
   speechWordActive: {
-    backgroundColor: 'rgba(220, 20, 60, 0.18)',
     color: '#000',
   },
   wordWrapContainer: {
@@ -1619,13 +1602,11 @@ const styles = StyleSheet.create({
   },
   wordToken: {
     fontSize: 16,
-    color: '#1A1A1A',
     fontFamily: 'monospace',
     lineHeight: 26,
   },
   combinedOutputModalContent: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
     paddingTop: 24,
     paddingHorizontal: 20,
     paddingBottom: 24,
@@ -1647,7 +1628,6 @@ const styles = StyleSheet.create({
   combinedOutputTitle: {
     flex: 1,
     marginLeft: 4,
-    color: '#1A1A1A',
     fontSize: 18,
     fontWeight: '600',
     textAlign: 'left',
@@ -1664,13 +1644,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#E5E5EA',
     borderRadius: 19,
-    backgroundColor: '#F7F7F7',
   },
   combinedOutputScroll: {
     flex: 1,
-    backgroundColor: '#F7F7F7',
     borderRadius: 8,
   },
   combinedOutputContent: {
@@ -1680,13 +1657,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     paddingBottom: 18,
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
   },
   combinedOutputImage: {
     width: '100%',
     height: height * 0.28,
     marginBottom: 10,
-    backgroundColor: '#FFFFFF',
   },
   renameOverlay: {
     flex: 1,
@@ -1695,7 +1670,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   renameContent: {
-    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 20,
     width: '85%',
@@ -1710,15 +1684,12 @@ const styles = StyleSheet.create({
   renameTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#1A1A1A',
   },
   renameInput: {
     borderWidth: 1,
-    borderColor: '#E5E5EA',
     borderRadius: 10,
     padding: 12,
     fontSize: 16,
-    color: '#1A1A1A',
     marginBottom: 20,
   },
   renameButtons: {
@@ -1731,17 +1702,12 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
   },
-  renameCancelBtn: {
-    backgroundColor: '#F5F5F5',
-  },
+  renameCancelBtn: {},
   renameCancelText: {
-    color: '#8E8E93',
     fontSize: 16,
     fontWeight: '500',
   },
-  renameSaveBtn: {
-    backgroundColor: '#DC143C',
-  },
+  renameSaveBtn: {},
   renameSaveText: {
     color: '#FFFFFF',
     fontSize: 16,

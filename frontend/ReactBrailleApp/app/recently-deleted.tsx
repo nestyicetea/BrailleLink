@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AxiosInstance from '../axios';
+import { useDisplay } from '../context/DisplayContext';
 
 interface DeletedItem {
   type: 'folder' | 'image';
@@ -14,6 +15,7 @@ interface DeletedItem {
 }
 
 export default function RecentlyDeletedScreen() {
+  const { theme } = useDisplay();
   const [refreshing, setRefreshing] = useState(false);
   const [items, setItems] = useState<DeletedItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -164,16 +166,16 @@ export default function RecentlyDeletedScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="chevron-back" size={28} color="#1A1A1A" />
+          <Ionicons name="chevron-back" size={28} color={theme.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Recently Deleted</Text>
+        <Text style={[styles.headerTitle, { color: theme.text }]}>Recently Deleted</Text>
         {items.length > 0 && (
           <TouchableOpacity onPress={handleEmptyTrash}>
-            <Text style={styles.emptyTrashText}>Empty</Text>
+            <Text style={[styles.emptyTrashText, { color: theme.accent }]}>Empty</Text>
           </TouchableOpacity>
         )}
         {items.length === 0 && <View style={styles.placeholder} />}
@@ -181,30 +183,30 @@ export default function RecentlyDeletedScreen() {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#DC143C" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accent} />}
         contentContainerStyle={styles.scrollContent}
       >
         {loading ? (
-          <Text style={styles.loadingText}>Loading...</Text>
+          <Text style={[styles.loadingText, { color: theme.textMuted }]}>Loading...</Text>
         ) : items.length === 0 ? (
           <View style={styles.emptyState}>
-            <Ionicons name="trash-outline" size={52} color="#E5E5EA" />
-            <Text style={styles.emptyText}>No Recently Deleted Items</Text>
-            <Text style={styles.emptySubtext}>Deleted items will appear here</Text>
+            <Ionicons name="trash-outline" size={52} color={theme.border} />
+            <Text style={[styles.emptyText, { color: theme.text }]}>No Recently Deleted Items</Text>
+            <Text style={[styles.emptySubtext, { color: theme.textMuted }]}>Deleted items will appear here</Text>
           </View>
         ) : (
           <>
-            <Text style={styles.infoText}>
+            <Text style={[styles.infoText, { color: theme.textMuted, backgroundColor: theme.surface }]}>
               Items in Recently Deleted will remain for 30 days before being permanently removed.
             </Text>
             {items.map((item) => (
-              <View key={`${item.type}-${item.id}`} style={styles.item}>
+              <View key={`${item.type}-${item.id}`} style={[styles.item, { backgroundColor: theme.surface }]}>
                 {item.type === 'folder' ? (
-                  <View style={styles.iconWrap}>
-                    <Ionicons name="folder" size={20} color="#DC143C" />
+                  <View style={[styles.iconWrap, { backgroundColor: theme.highlight }]}>
+                    <Ionicons name="folder" size={20} color={theme.accent} />
                   </View>
                 ) : (
-                  <View style={styles.imageWrap}>
+                  <View style={[styles.imageWrap, { backgroundColor: theme.surface }]}>
                     {item.image_url ? (
                       <Image 
                         source={{ uri: item.image_url }} 
@@ -212,16 +214,16 @@ export default function RecentlyDeletedScreen() {
                         resizeMode="cover"
                       />
                     ) : (
-                      <Ionicons name="document-text" size={20} color="#DC143C" />
+                      <Ionicons name="document-text" size={20} color={theme.accent} />
                     )}
                   </View>
                 )}
 
                 <View style={styles.itemContent}>
-                  <Text style={styles.itemTitle} numberOfLines={1}>
+                  <Text style={[styles.itemTitle, { color: theme.text }]} numberOfLines={1}>
                     {item.name}
                   </Text>
-                  <Text style={styles.itemSub} numberOfLines={1}>
+                  <Text style={[styles.itemSub, { color: theme.textMuted }]} numberOfLines={1}>
                     {item.type === 'folder' ? 'Folder' : item.folder_name ? `📁 ${item.folder_name}` : 'Image'}
                     {' · Deleted '}
                     {formatTimeAgo(item.deleted_at)}
@@ -239,7 +241,7 @@ export default function RecentlyDeletedScreen() {
                     style={styles.actionButton}
                     onPress={() => handlePermanentDelete(item)}
                   >
-                    <Ionicons name="trash" size={20} color="#DC143C" />
+                    <Ionicons name="trash" size={20} color={theme.accent} />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -252,7 +254,7 @@ export default function RecentlyDeletedScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -260,26 +262,22 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingBottom: 15,
     paddingHorizontal: 16,
-    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
   },
   backButton: { width: 40, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '600', color: '#1A1A1A' },
-  emptyTrashText: { fontSize: 16, fontWeight: '600', color: '#DC143C' },
+  headerTitle: { fontSize: 18, fontWeight: '600' },
+  emptyTrashText: { fontSize: 16, fontWeight: '600' },
   placeholder: { width: 60 },
   scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 40 },
-  loadingText: { textAlign: 'center', color: '#8E8E93', marginTop: 40 },
+  loadingText: { textAlign: 'center', marginTop: 40 },
   emptyState: { alignItems: 'center', paddingTop: 80 },
-  emptyText: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', marginTop: 16 },
-  emptySubtext: { fontSize: 13, color: '#8E8E93', marginTop: 4 },
+  emptyText: { fontSize: 16, fontWeight: '600', marginTop: 16 },
+  emptySubtext: { fontSize: 13, marginTop: 4 },
   infoText: {
     fontSize: 12,
-    color: '#8E8E93',
     textAlign: 'center',
     paddingHorizontal: 20,
     paddingVertical: 12,
-    backgroundColor: '#F8F8F8',
     borderRadius: 8,
     marginBottom: 16,
   },
@@ -288,7 +286,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     paddingHorizontal: 12,
-    backgroundColor: '#F8F8F8',
     borderRadius: 12,
     marginBottom: 8,
   },
@@ -296,7 +293,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#FFE8EB',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -305,7 +301,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 8,
-    backgroundColor: '#F8F8F8',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -316,8 +311,8 @@ const styles = StyleSheet.create({
     height: 40,
   },
   itemContent: { flex: 1, marginRight: 8 },
-  itemTitle: { fontSize: 15, fontWeight: '500', color: '#1A1A1A', marginBottom: 2 },
-  itemSub: { fontSize: 12, color: '#8E8E93' },
+  itemTitle: { fontSize: 15, fontWeight: '500', marginBottom: 2 },
+  itemSub: { fontSize: 12 },
   actions: {
     flexDirection: 'row',
     gap: 8,

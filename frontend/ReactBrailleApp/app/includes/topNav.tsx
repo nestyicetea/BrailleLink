@@ -1,14 +1,16 @@
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { usePathname, router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useDisplay } from '../../context/DisplayContext';
 
 export default function TopNav() {
+  const { theme } = useDisplay();
   const pathname = usePathname();
   const isSettings = pathname === '/settings';
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>BrailleLink</Text>
+    <View style={[styles.container, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
+      <Text style={[styles.title, { color: theme.text }]}>BrailleLink</Text>
       <TouchableOpacity
         onPress={() => router.push('/settings')}
         style={styles.settingsButton}
@@ -17,7 +19,7 @@ export default function TopNav() {
         <Ionicons
           name={isSettings ? 'settings' : 'settings-outline'}
           size={22}
-          color={isSettings ? '#DC143C' : '#555'}
+          color={isSettings ? theme.accent : theme.textMuted}
         />
       </TouchableOpacity>
     </View>
@@ -32,14 +34,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 50,
     paddingBottom: 15,
-    backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
   },
   title: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: '#333',
     flex: 1,
   },
   settingsButton: {

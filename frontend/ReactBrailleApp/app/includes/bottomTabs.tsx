@@ -1,8 +1,10 @@
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { router, usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useDisplay } from '../../context/DisplayContext';
 
 export default function BottomTabs() {
+  const { theme } = useDisplay();
   const pathname = usePathname();
 
   const isDashboard = pathname === '/dashboard';
@@ -12,7 +14,7 @@ export default function BottomTabs() {
   return (
     <View style={styles.wrapper}>
       {/* Curved cutout background */}
-      <View style={styles.container}>
+      <View style={[styles.container, { backgroundColor: theme.background, borderTopColor: theme.border }]}>
 
         {/* Dashboard Tab */}
         <TouchableOpacity
@@ -20,14 +22,14 @@ export default function BottomTabs() {
           onPress={() => router.push('/dashboard')}
           activeOpacity={0.7}
         >
-          <View style={[styles.iconWrapper, isDashboard && styles.iconWrapperActive]}>
+          <View style={[styles.iconWrapper, isDashboard && { backgroundColor: theme.highlight }]}>
             <Ionicons
               name={isDashboard ? 'grid' : 'grid-outline'}
               size={22}
-              color={isDashboard ? '#DC143C' : '#9E9E9E'}
+              color={isDashboard ? theme.accent : theme.textMuted}
             />
           </View>
-          <Text style={[styles.label, isDashboard && styles.activeLabel]}>Dashboard</Text>
+          <Text style={[styles.label, { color: theme.textMuted }, isDashboard && { color: theme.accent, fontWeight: '700' }]}>Dashboard</Text>
         </TouchableOpacity>
 
         {/* Center spacer for FAB */}
@@ -39,14 +41,14 @@ export default function BottomTabs() {
           onPress={() => router.push('/files')}
           activeOpacity={0.7}
         >
-          <View style={[styles.iconWrapper, isFiles && styles.iconWrapperActive]}>
+          <View style={[styles.iconWrapper, isFiles && { backgroundColor: theme.highlight }]}>
             <Ionicons
               name={isFiles ? 'folder' : 'folder-outline'}
               size={22}
-              color={isFiles ? '#DC143C' : '#9E9E9E'}
+              color={isFiles ? theme.accent : theme.textMuted}
             />
           </View>
-          <Text style={[styles.label, isFiles && styles.activeLabel]}>Files</Text>
+          <Text style={[styles.label, { color: theme.textMuted }, isFiles && { color: theme.accent, fontWeight: '700' }]}>Files</Text>
         </TouchableOpacity>
       </View>
 
@@ -56,8 +58,8 @@ export default function BottomTabs() {
         onPress={() => router.push('/camera')}
         activeOpacity={0.85}
       >
-        <View style={styles.fabRing}>
-          <View style={styles.fabInner}>
+        <View style={[styles.fabRing, { backgroundColor: theme.background }]}>
+          <View style={[styles.fabInner, { backgroundColor: theme.accent }]}>
             <Ionicons name="camera" size={26} color="#fff" />
             <Text style={styles.fabLabel}>Scan</Text>
           </View>
@@ -79,18 +81,12 @@ const styles = StyleSheet.create({
 
   container: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
     height: TAB_BAR_HEIGHT,
     paddingBottom: Platform.OS === 'ios' ? 10 : 0,
     borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 10,
-    // Shadow
-    // shadowColor: '#000',
-    // shadowOffset: { width: 0, height: -3 },
-    // shadowOpacity: 0.06,
     shadowRadius: 8,
     elevation: 10,
     width: '100%',
@@ -112,20 +108,10 @@ const styles = StyleSheet.create({
     borderRadius: 14,
   },
 
-  iconWrapperActive: {
-    backgroundColor: '#FFF0F0',
-  },
-
   label: {
     fontSize: 11,
-    color: '#9E9E9E',
     marginTop: 3,
     fontWeight: '500',
-  },
-
-  activeLabel: {
-    color: '#DC143C',
-    fontWeight: '700',
   },
 
   // Empty space in the middle for FAB
@@ -145,13 +131,8 @@ const styles = StyleSheet.create({
     width: FAB_RING,
     height: FAB_RING,
     borderRadius: FAB_RING / 2,
-    backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
-    // Matches bar shadow so it blends
-    // shadowColor: '#000',
-    // shadowOffset: { width: 0, height: -2 },
-    // shadowOpacity: 0.08,
     shadowRadius: 6,
     elevation: 12,
   },
@@ -160,12 +141,8 @@ const styles = StyleSheet.create({
     width: FAB_SIZE,
     height: FAB_SIZE,
     borderRadius: FAB_SIZE / 2,
-    backgroundColor: '#DC143C',
     alignItems: 'center',
     justifyContent: 'center',
-    // shadowColor: '#DC143C',
-    // shadowOffset: { width: 0, height: 4 },
-    // shadowOpacity: 0.4,
     shadowRadius: 8,
     elevation: 10,
   },

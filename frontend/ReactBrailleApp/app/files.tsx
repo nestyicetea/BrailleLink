@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AxiosInstance from '../axios';
 import { router } from 'expo-router';
+import { useDisplay } from '../context/DisplayContext';
 
 const { width } = Dimensions.get('window');
 const COLUMN_WIDTH = (width - 48) / 3;
@@ -16,6 +17,7 @@ interface FileItem {
 }
 
 export default function FilesScreen() {
+  const { theme } = useDisplay();
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -256,39 +258,39 @@ export default function FilesScreen() {
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Loading folders...</Text>
+      <View style={[styles.loadingContainer, { backgroundColor: theme.background }]}>
+        <Text style={[styles.loadingText, { color: theme.textMuted }]}>Loading folders...</Text>
       </View>
     );
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       <ScrollView
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={['#666666']}
-            tintColor="#666666"
+            colors={[theme.textMuted]}
+            tintColor={theme.textMuted}
           />
         }
       >
         {/* Search & Filter Row */}
         <View style={styles.searchContainer}>
-          <View style={styles.searchBar}>
-            <Ionicons name="search-outline" size={18} color="#8E8E93" style={styles.searchIcon} />
+          <View style={[styles.searchBar, { borderBottomColor: theme.border }]}>
+            <Ionicons name="search-outline" size={18} color={theme.textMuted} style={styles.searchIcon} />
             <TextInput
-              style={styles.searchInput}
+              style={[styles.searchInput, { color: theme.text }]}
               placeholder="Search"
-              placeholderTextColor="#C7C7CC"
+              placeholderTextColor={theme.textMuted}
               value={searchQuery}
               onChangeText={setSearchQuery}
             />
             {searchQuery !== '' && (
               <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={16} color="#8E8E93" />
+                <Ionicons name="close-circle" size={16} color={theme.textMuted} />
               </TouchableOpacity>
             )}
           </View>
@@ -297,8 +299,8 @@ export default function FilesScreen() {
             style={styles.filterButton} 
             onPress={() => setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc')}
           >
-            <View style={styles.filterButtonInner}>
-              <Ionicons name="swap-vertical-outline" size={18} color="#1A1A1A" />
+            <View style={[styles.filterButtonInner, { backgroundColor: theme.surface }]}>
+              <Ionicons name="swap-vertical-outline" size={18} color={theme.text} />
             </View>
           </TouchableOpacity>
         </View>
@@ -431,17 +433,14 @@ export default function FilesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
   },
   loadingText: {
     fontSize: 14,
-    color: '#8E8E93',
   },
   searchContainer: {
     flexDirection: 'row',
@@ -455,7 +454,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
     paddingBottom: 8,
   },
   searchIcon: {
@@ -464,7 +462,6 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 16,
-    color: '#1A1A1A',
     paddingVertical: 0,
   },
   filterButton: {
@@ -475,7 +472,6 @@ const styles = StyleSheet.create({
   filterButtonInner: {
     paddingHorizontal: 12,
     paddingVertical: 8,
-    backgroundColor: '#F8F8F8',
     borderRadius: 20,
   },
   gridContainer: {

@@ -3,12 +3,21 @@ import { useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import { useDisplay, ColorMode } from '../context/DisplayContext';
 
 const SETTINGS_KEYS = {
   TTS_AUTOPLAY: 'tts_autoplay',
 };
 
+const THEME_OPTIONS: { mode: ColorMode; label: string; icon: string; description: string }[] = [
+  { mode: 'light', label: 'Light', icon: 'sunny', description: 'Clean and bright interface' },
+  { mode: 'dark', label: 'Dark', icon: 'moon', description: 'Easy on the eyes at night' },
+  { mode: 'sepia', label: 'Sepia', icon: 'book', description: 'Warm tones for reading' },
+  { mode: 'system', label: 'Auto', icon: 'phone-portrait', description: 'Match device settings' },
+];
+
 export default function SettingsScreen() {
+  const { theme, colorMode, setColorMode } = useDisplay();
   const [ttsAutoPlay, setTtsAutoPlay] = useState(false);
 
   useEffect(() => {
@@ -23,72 +32,96 @@ export default function SettingsScreen() {
   };
 
   return (
-    <View style={styles.wrapper}>
+    <View style={[styles.wrapper, { backgroundColor: theme.background }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={22} color="#1A1A1A" />
+          <Ionicons name="arrow-back" size={22} color={theme.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Settings</Text>
+        <Text style={[styles.headerTitle, { color: theme.text }]}>Settings</Text>
         <View style={styles.headerPlaceholder} />
       </View>
 
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
         {/* Text-to-Speech Section */}
-        <Text style={styles.sectionHeader}>Text-to-Speech</Text>
-        <View style={styles.section}>
+        <Text style={[styles.sectionHeader, { color: theme.textMuted }]}>Text-to-Speech</Text>
+        <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
           <View style={styles.row}>
             <View style={styles.rowLeft}>
-              <Ionicons name="volume-high-outline" size={20} color="#DC143C" style={styles.rowIcon} />
+              <Ionicons name="volume-high-outline" size={20} color={theme.accent} style={styles.rowIcon} />
               <View>
-                <Text style={styles.rowTitle}>Auto-Play Speech</Text>
-                <Text style={styles.rowSubtitle}>Automatically read outputs when opened</Text>
+                <Text style={[styles.rowTitle, { color: theme.text }]}>Auto-Play Speech</Text>
+                <Text style={[styles.rowSubtitle, { color: theme.textMuted }]}>Automatically read outputs when opened</Text>
               </View>
             </View>
             <Switch
               value={ttsAutoPlay}
               onValueChange={toggleAutoPlay}
-              trackColor={{ false: '#E5E5EA', true: '#DC143C' }}
+              trackColor={{ false: theme.border, true: theme.accent }}
               thumbColor="#fff"
             />
           </View>
         </View>
 
         {/* Display Section */}
-        <Text style={styles.sectionHeader}>Display</Text>
-        <View style={styles.section}>
+        <Text style={[styles.sectionHeader, { color: theme.textMuted }]}>Display</Text>
+        <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
           <TouchableOpacity
             style={styles.row}
             onPress={() => router.push('/display')}
             activeOpacity={0.7}
           >
             <View style={styles.rowLeft}>
-              <Ionicons name="text-outline" size={20} color="#DC143C" style={styles.rowIcon} />
+              <Ionicons name="text-outline" size={20} color={theme.accent} style={styles.rowIcon} />
               <View>
-                <Text style={styles.rowTitle}>Font Size</Text>
-                <Text style={styles.rowSubtitle}>Adjust the app text size</Text>
+                <Text style={[styles.rowTitle, { color: theme.text }]}>Font Settings</Text>
+                <Text style={[styles.rowSubtitle, { color: theme.textMuted }]}>Font size and text weight</Text>
               </View>
             </View>
-            <Ionicons name="chevron-forward" size={20} color="#C7C7CC" />
+            <Ionicons name="chevron-forward" size={20} color={theme.textMuted} />
           </TouchableOpacity>
         </View>
 
+        {/* Appearance Section */}
+        <Text style={[styles.sectionHeader, { color: theme.textMuted }]}>Appearance</Text>
+        <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+          {THEME_OPTIONS.map((option) => (
+            <TouchableOpacity
+              key={option.mode}
+              style={styles.row}
+              onPress={() => setColorMode(option.mode)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.rowLeft}>
+                <Ionicons name={option.icon as any} size={20} color={colorMode === option.mode ? theme.accent : theme.textMuted} style={styles.rowIcon} />
+                <View>
+                  <Text style={[styles.rowTitle, { color: theme.text }]}>{option.label}</Text>
+                  <Text style={[styles.rowSubtitle, { color: theme.textMuted }]}>{option.description}</Text>
+                </View>
+              </View>
+              {colorMode === option.mode && (
+                <Ionicons name="checkmark-circle" size={20} color={theme.accent} />
+              )}
+            </TouchableOpacity>
+          ))}
+        </View>
+
         {/* Storage Section */}
-        <Text style={styles.sectionHeader}>Storage</Text>
-        <View style={styles.section}>
+        <Text style={[styles.sectionHeader, { color: theme.textMuted }]}>Storage</Text>
+        <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
           <TouchableOpacity 
             style={styles.row}
             onPress={() => router.push('/recently-deleted')}
             activeOpacity={0.7}
           >
             <View style={styles.rowLeft}>
-              <Ionicons name="trash-outline" size={20} color="#DC143C" style={styles.rowIcon} />
+              <Ionicons name="trash-outline" size={20} color={theme.accent} style={styles.rowIcon} />
               <View>
-                <Text style={styles.rowTitle}>Recently Deleted</Text>
-                <Text style={styles.rowSubtitle}>Manage deleted folders and images</Text>
+                <Text style={[styles.rowTitle, { color: theme.text }]}>Recently Deleted</Text>
+                <Text style={[styles.rowSubtitle, { color: theme.textMuted }]}>Manage deleted folders and images</Text>
               </View>
             </View>
-            <Ionicons name="chevron-forward" size={20} color="#C7C7CC" />
+            <Ionicons name="chevron-forward" size={20} color={theme.textMuted} />
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -99,7 +132,6 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   wrapper: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
   },
   header: {
     flexDirection: 'row',
@@ -108,9 +140,7 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingBottom: 15,
     paddingHorizontal: 20,
-    backgroundColor: '#fff',
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
   },
   backButton: {
     width: 32,
@@ -119,7 +149,6 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#1A1A1A',
   },
   headerPlaceholder: {
     width: 32,
@@ -130,7 +159,6 @@ const styles = StyleSheet.create({
   sectionHeader: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#8E8E93',
     textTransform: 'uppercase',
     letterSpacing: 0.8,
     paddingHorizontal: 20,
@@ -138,10 +166,8 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   section: {
-    backgroundColor: '#FFFFFF',
     borderTopWidth: 0.5,
     borderBottomWidth: 0.5,
-    borderColor: '#E5E5EA',
   },
   row: {
     flexDirection: 'row',
@@ -149,8 +175,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 14,
-    borderBottomWidth: 0.5,
-    borderBottomColor: '#F0F0F0',
   },
   rowLeft: {
     flexDirection: 'row',
@@ -163,12 +187,10 @@ const styles = StyleSheet.create({
   },
   rowTitle: {
     fontSize: 15,
-    color: '#1A1A1A',
     fontWeight: '500',
   },
   rowSubtitle: {
     fontSize: 12,
-    color: '#8E8E93',
     marginTop: 2,
   },
 });

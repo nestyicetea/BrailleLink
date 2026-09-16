@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AxiosInstance from '../axios';
+import { useDisplay } from '../context/DisplayContext';
 
 interface RecentImage {
   image_id: number;
@@ -17,6 +18,7 @@ interface RecentImage {
 }
 
 export default function RecentsScreen() {
+  const { theme } = useDisplay();
   const [refreshing, setRefreshing] = useState(false);
   const [images, setImages] = useState<RecentImage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,30 +125,30 @@ export default function RecentsScreen() {
   const groups = groupByDate(getFilteredImages());
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { backgroundColor: theme.background, borderBottomColor: theme.border }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <Ionicons name="chevron-back" size={28} color="#1A1A1A" />
+          <Ionicons name="chevron-back" size={28} color={theme.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Recents</Text>
+        <Text style={[styles.headerTitle, { color: theme.text }]}>Recents</Text>
         <View style={styles.placeholder} />
       </View>
 
       {/* Search & Filter */}
-      <View style={styles.searchContainer}>
-        <View style={styles.searchBar}>
-          <Ionicons name="search-outline" size={18} color="#8E8E93" style={styles.searchIcon} />
+      <View style={[styles.searchContainer, { borderBottomColor: theme.border }]}>
+        <View style={[styles.searchBar, { borderBottomColor: theme.border }]}>
+          <Ionicons name="search-outline" size={18} color={theme.textMuted} style={styles.searchIcon} />
           <TextInput
-            style={styles.searchInput}
+            style={[styles.searchInput, { color: theme.text }]}
             placeholder="Search"
-            placeholderTextColor="#C7C7CC"
+            placeholderTextColor={theme.textMuted}
             value={searchQuery}
             onChangeText={setSearchQuery}
           />
           {searchQuery !== '' && (
             <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <Ionicons name="close-circle" size={16} color="#8E8E93" />
+              <Ionicons name="close-circle" size={16} color={theme.textMuted} />
             </TouchableOpacity>
           )}
         </View>
@@ -154,38 +156,38 @@ export default function RecentsScreen() {
           style={styles.filterButton}
           onPress={() => setSortOrder(o => o === 'desc' ? 'asc' : 'desc')}
         >
-          <View style={styles.filterButtonInner}>
-            <Ionicons name="swap-vertical-outline" size={18} color="#1A1A1A" />
+          <View style={[styles.filterButtonInner, { backgroundColor: theme.surface }]}>
+            <Ionicons name="swap-vertical-outline" size={18} color={theme.text} />
           </View>
         </TouchableOpacity>
       </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#DC143C" />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.accent} />}
         contentContainerStyle={styles.scrollContent}
       >
         {loading ? (
-          <Text style={styles.loadingText}>Loading...</Text>
+          <Text style={[styles.loadingText, { color: theme.textMuted }]}>Loading...</Text>
         ) : images.length === 0 ? (
           <View style={styles.emptyState}>
-            <Ionicons name="time-outline" size={52} color="#E5E5EA" />
-            <Text style={styles.emptyText}>No recent activity</Text>
-            <Text style={styles.emptySubtext}>Your scans will appear here</Text>
+            <Ionicons name="time-outline" size={52} color={theme.border} />
+            <Text style={[styles.emptyText, { color: theme.text }]}>No recent activity</Text>
+            <Text style={[styles.emptySubtext, { color: theme.textMuted }]}>Your scans will appear here</Text>
           </View>
         ) : (
           groups.map((group) => (
             <View key={group.label}>
-              <Text style={styles.groupLabel}>{group.label}</Text>
+              <Text style={[styles.groupLabel, { color: theme.textMuted }]}>{group.label}</Text>
               {group.data.map((image) => (
                 <TouchableOpacity
                   key={image.image_id}
-                  style={styles.item}
+                  style={[styles.item, { backgroundColor: theme.surface }]}
                   onPress={() => handlePress(image)}
                   activeOpacity={0.7}
                 >
                   {image.image_url ? (
-                    <View style={styles.imageWrap}>
+                    <View style={[styles.imageWrap, { backgroundColor: theme.surface }]}>
                       <Image 
                         source={{ uri: image.image_url }} 
                         style={styles.thumbnail}
@@ -193,24 +195,24 @@ export default function RecentsScreen() {
                       />
                     </View>
                   ) : (
-                    <View style={styles.iconWrap}>
-                      <Ionicons name="document-text" size={20} color="#DC143C" />
+                    <View style={[styles.iconWrap, { backgroundColor: theme.highlight }]}>
+                      <Ionicons name="document-text" size={20} color={theme.accent} />
                     </View>
                   )}
 
                   <View style={styles.itemContent}>
-                    <Text style={styles.itemTitle} numberOfLines={1}>
+                    <Text style={[styles.itemTitle, { color: theme.text }]} numberOfLines={1}>
                       {image.image_name || 'Untitled'}
                     </Text>
-                    <Text style={styles.itemSub} numberOfLines={1}>
+                    <Text style={[styles.itemSub, { color: theme.textMuted }]} numberOfLines={1}>
                       {image.folder ? `📁 ${image.folder.folder_name}` : 'Unfiled'}
                       {image.output_text ? `  ·  ${image.output_text.substring(0, 30)}...` : ''}
                     </Text>
                   </View>
 
                   <View style={styles.itemMeta}>
-                    <Text style={styles.itemTime}>{formatTimeAgo(image.created_at)}</Text>
-                    <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
+                    <Text style={[styles.itemTime, { color: theme.textMuted }]}>{formatTimeAgo(image.created_at)}</Text>
+                    <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
                   </View>
                 </TouchableOpacity>
               ))}
@@ -223,7 +225,7 @@ export default function RecentsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFFFFF' },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -231,12 +233,10 @@ const styles = StyleSheet.create({
     paddingTop: 50,
     paddingBottom: 15,
     paddingHorizontal: 16,
-    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
   },
   backButton: { width: 40, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '600', color: '#1A1A1A' },
+  headerTitle: { fontSize: 18, fontWeight: '600' },
   placeholder: { width: 40 },
   scrollContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 40 },
   searchContainer: {
@@ -246,38 +246,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
     borderBottomWidth: 0.5,
-    borderBottomColor: '#E5E5EA',
   },
   searchBar: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
     paddingBottom: 8,
   },
   searchIcon: { marginRight: 8 },
   searchInput: {
     flex: 1,
     fontSize: 16,
-    color: '#1A1A1A',
     paddingVertical: 0,
   },
   filterButton: { height: 40, justifyContent: 'center', alignItems: 'center' },
   filterButtonInner: {
     paddingHorizontal: 12,
     paddingVertical: 8,
-    backgroundColor: '#F8F8F8',
     borderRadius: 20,
   },
-  loadingText: { textAlign: 'center', color: '#8E8E93', marginTop: 40 },
+  loadingText: { textAlign: 'center', marginTop: 40 },
   emptyState: { alignItems: 'center', paddingTop: 80 },
-  emptyText: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', marginTop: 16 },
-  emptySubtext: { fontSize: 13, color: '#8E8E93', marginTop: 4 },
+  emptyText: { fontSize: 16, fontWeight: '600', marginTop: 16 },
+  emptySubtext: { fontSize: 13, marginTop: 4 },
   groupLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#8E8E93',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     marginTop: 20,
@@ -288,7 +283,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     paddingHorizontal: 12,
-    backgroundColor: '#F8F8F8',
     borderRadius: 12,
     marginBottom: 8,
   },
@@ -296,7 +290,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#FFE8EB',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -305,7 +298,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 8,
-    backgroundColor: '#F8F8F8',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -316,9 +308,9 @@ const styles = StyleSheet.create({
     height: 40,
   },
   itemContent: { flex: 1, marginRight: 8 },
-  itemTitle: { fontSize: 15, fontWeight: '500', color: '#1A1A1A', marginBottom: 2 },
-  itemSub: { fontSize: 12, color: '#8E8E93' },
+  itemTitle: { fontSize: 15, fontWeight: '500', marginBottom: 2 },
+  itemSub: { fontSize: 12 },
   itemMeta: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  itemTime: { fontSize: 12, color: '#C7C7CC', fontWeight: '500' },
+  itemTime: { fontSize: 12, fontWeight: '500' },
   activityMeta: { flexDirection: 'row', alignItems: 'center', gap: 4 },
 });

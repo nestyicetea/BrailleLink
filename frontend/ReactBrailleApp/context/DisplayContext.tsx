@@ -64,7 +64,7 @@ export function DisplayProvider({ children }: { children: ReactNode }) {
   const systemScheme = useColorScheme();
   const [fontScale, setFontScaleState] = useState(1.0);
   const [fontWeight, setFontWeightState] = useState(400);
-  const [colorMode, setColorModeState] = useState<ColorMode>('system');
+  const [colorMode, setColorModeState] = useState<ColorMode>('light');
 
   useEffect(() => {
     (async () => {

@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AxiosInstance from '../axios';
+import { useDisplay } from '../context/DisplayContext';
 
 interface RecentImage {
   image_id: number;
@@ -18,6 +19,7 @@ interface RecentImage {
 }
 
 export default function DashboardScreen() {
+  const { theme } = useDisplay();
   const [refreshing, setRefreshing] = useState(false);
   const [stats, setStats] = useState({ folders: 0, images: 0, todayScans: 0, storageMB: 0 });
   const [recentImages, setRecentImages] = useState<RecentImage[]>([]);
@@ -98,56 +100,56 @@ export default function DashboardScreen() {
 
   return (
     <ScrollView 
-      style={styles.container}
+      style={[styles.container, { backgroundColor: theme.background }]}
       showsVerticalScrollIndicator={false}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#8E8E93" />}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={theme.textMuted} />}
     >
       {/* Main Stats Row */}
-      <View style={styles.statsRow}>
+      <View style={[styles.statsRow, { borderBottomColor: theme.border }]}>
         <TouchableOpacity style={styles.statItem} onPress={() => router.push('/files')}>
-          <Text style={styles.statValue}>{stats.folders}</Text>
-          <Text style={styles.statLabel}>folders</Text>
+          <Text style={[styles.statValue, { color: theme.text }]}>{stats.folders}</Text>
+          <Text style={[styles.statLabel, { color: theme.textMuted }]}>folders</Text>
         </TouchableOpacity>
-        <View style={styles.statDivider} />
+        <View style={[styles.statDivider, { backgroundColor: theme.border }]} />
         <TouchableOpacity style={styles.statItem} onPress={() => router.push('/files')}>
-          <Text style={styles.statValue}>{stats.images}</Text>
-          <Text style={styles.statLabel}>images</Text>
+          <Text style={[styles.statValue, { color: theme.text }]}>{stats.images}</Text>
+          <Text style={[styles.statLabel, { color: theme.textMuted }]}>images</Text>
         </TouchableOpacity>
       </View>
 
       {/* Secondary Stats Row - New */}
-      <View style={styles.secondaryStatsRow}>
+      <View style={[styles.secondaryStatsRow, { borderBottomColor: theme.border }]}>
         <View style={styles.secondaryStatItem}>
-          <Ionicons name="today-outline" size={20} color="#DC143C" />
-          <Text style={styles.secondaryStatValue}>{stats.todayScans}</Text>
-          <Text style={styles.secondaryStatLabel}>scans today</Text>
+          <Ionicons name="today-outline" size={20} color={theme.accent} />
+          <Text style={[styles.secondaryStatValue, { color: theme.text }]}>{stats.todayScans}</Text>
+          <Text style={[styles.secondaryStatLabel, { color: theme.textMuted }]}>scans today</Text>
         </View>
-        <View style={styles.statDivider} />
+        <View style={[styles.statDivider, { backgroundColor: theme.border }]} />
         <View style={styles.secondaryStatItem}>
-          <Ionicons name="cloud-outline" size={20} color="#DC143C" />
-          <Text style={styles.secondaryStatValue}>{stats.storageMB}</Text>
-          <Text style={styles.secondaryStatLabel}>MB used</Text>
+          <Ionicons name="cloud-outline" size={20} color={theme.accent} />
+          <Text style={[styles.secondaryStatValue, { color: theme.text }]}>{stats.storageMB}</Text>
+          <Text style={[styles.secondaryStatLabel, { color: theme.textMuted }]}>MB used</Text>
         </View>
       </View>
 
       {/* Recent Activity */}
       <View style={styles.recentSection}>
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent Activity</Text>
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>Recent Activity</Text>
           {recentImages.length > 0 && (
             <TouchableOpacity onPress={() => router.push('/recents')}>
-              <Text style={styles.seeAllText}>See All</Text>
+              <Text style={[styles.seeAllText, { color: theme.accent }]}>See All</Text>
             </TouchableOpacity>
           )}
         </View>
 
         {recentImages.length === 0 ? (
           <View style={styles.emptyState}>
-            <Ionicons name="document-text-outline" size={48} color="#E5E5EA" />
-            <Text style={styles.emptyStateText}>No scans yet</Text>
-            <Text style={styles.emptyStateSubtext}>Start scanning Braille documents</Text>
+            <Ionicons name="document-text-outline" size={48} color={theme.border} />
+            <Text style={[styles.emptyStateText, { color: theme.text }]}>No scans yet</Text>
+            <Text style={[styles.emptyStateSubtext, { color: theme.textMuted }]}>Start scanning Braille documents</Text>
             <TouchableOpacity 
-              style={styles.emptyStateButton}
+              style={[styles.emptyStateButton, { backgroundColor: theme.accent }]}
               onPress={() => router.push('/camera')}
             >
               <Ionicons name="camera" size={18} color="#fff" />
@@ -159,7 +161,7 @@ export default function DashboardScreen() {
             {recentImages.map((image) => (
               <TouchableOpacity
                 key={image.image_id}
-                style={styles.activityItem}
+                style={[styles.activityItem, { backgroundColor: theme.surface }]}
                 onPress={async () => {
                   if (image.folder) {
                     // Navigate to the folder containing this image
@@ -183,7 +185,7 @@ export default function DashboardScreen() {
                 activeOpacity={0.7}
               >
                 {image.image_url ? (
-                  <View style={styles.activityImageWrap}>
+                  <View style={[styles.activityImageWrap, { backgroundColor: theme.surface }]}>
                     <Image 
                       source={{ uri: image.image_url }} 
                       style={styles.activityThumbnail}
@@ -191,16 +193,16 @@ export default function DashboardScreen() {
                     />
                   </View>
                 ) : (
-                  <View style={styles.activityIcon}>
-                    <Ionicons name="document-text" size={20} color="#DC143C" />
+                  <View style={[styles.activityIcon, { backgroundColor: theme.highlight }]}>
+                    <Ionicons name="document-text" size={20} color={theme.accent} />
                   </View>
                 )}
                 
                 <View style={styles.activityContent}>
-                  <Text style={styles.activityTitle} numberOfLines={1}>
+                  <Text style={[styles.activityTitle, { color: theme.text }]} numberOfLines={1}>
                     {image.image_name || 'Untitled'}
                   </Text>
-                  <Text style={styles.activitySubtitle} numberOfLines={1}>
+                  <Text style={[styles.activitySubtitle, { color: theme.textMuted }]} numberOfLines={1}>
                     {image.output_text ? 
                       `${image.output_text.substring(0, 40)}${image.output_text.length > 40 ? '...' : ''}` : 
                       'No text extracted'
@@ -209,10 +211,10 @@ export default function DashboardScreen() {
                 </View>
 
                 <View style={styles.activityMeta}>
-                  <Text style={styles.activityTime}>
+                  <Text style={[styles.activityTime, { color: theme.textMuted }]}>
                     {formatTimeAgo(image.created_at)}
                   </Text>
-                  <Ionicons name="chevron-forward" size={16} color="#C7C7CC" />
+                  <Ionicons name="chevron-forward" size={16} color={theme.textMuted} />
                 </View>
               </TouchableOpacity>
             ))}
@@ -255,7 +257,6 @@ export default function DashboardScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
   },
   statsRow: {
     flexDirection: 'row',
@@ -264,7 +265,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     alignItems: 'center',
     borderBottomWidth: 0.5,
-    borderBottomColor: '#E5E5EA',
   },
   statItem: {
     flex: 1,
@@ -273,11 +273,9 @@ const styles = StyleSheet.create({
   statValue: {
     fontSize: 28,
     fontWeight: '300',
-    color: '#1A1A1A',
   },
   statLabel: {
     fontSize: 11,
-    color: '#8E8E93',
     marginTop: 2,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -285,7 +283,6 @@ const styles = StyleSheet.create({
   statDivider: {
     width: 0.5,
     height: 30,
-    backgroundColor: '#E5E5EA',
   },
   secondaryStatsRow: {
     flexDirection: 'row',
@@ -293,7 +290,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
     alignItems: 'center',
     borderBottomWidth: 0.5,
-    borderBottomColor: '#E5E5EA',
   },
   secondaryStatItem: {
     flex: 1,
@@ -305,11 +301,9 @@ const styles = StyleSheet.create({
   secondaryStatValue: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1A1A1A',
   },
   secondaryStatLabel: {
     fontSize: 11,
-    color: '#8E8E93',
   },
   recentSection: {
     paddingTop: 20,
@@ -325,12 +319,10 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#1A1A1A',
     letterSpacing: -0.4,
   },
   seeAllText: {
     fontSize: 14,
-    color: '#DC143C',
     fontWeight: '500',
   },
   emptyState: {
@@ -341,19 +333,16 @@ const styles = StyleSheet.create({
   emptyStateText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#1A1A1A',
     marginTop: 12,
   },
   emptyStateSubtext: {
     fontSize: 13,
-    color: '#8E8E93',
     marginTop: 4,
   },
   emptyStateButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#DC143C',
     paddingHorizontal: 20,
     paddingVertical: 10,
     borderRadius: 20,
@@ -372,7 +361,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     paddingHorizontal: 12,
-    backgroundColor: '#F8F8F8',
     borderRadius: 12,
     marginBottom: 8,
   },
@@ -380,7 +368,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#FFE8EB',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -389,7 +376,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 8,
-    backgroundColor: '#F8F8F8',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 12,
@@ -406,12 +392,10 @@ const styles = StyleSheet.create({
   activityTitle: {
     fontSize: 15,
     fontWeight: '500',
-    color: '#1A1A1A',
     marginBottom: 2,
   },
   activitySubtitle: {
     fontSize: 13,
-    color: '#8E8E93',
   },
   activityMeta: {
     flexDirection: 'row',
@@ -420,7 +404,6 @@ const styles = StyleSheet.create({
   },
   activityTime: {
     fontSize: 12,
-    color: '#C7C7CC',
     fontWeight: '500',
   },
 });

@@ -44,13 +44,35 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 export function estimateWordTimestamps(text: string, totalMs: number): WordTimestamp[] {
   const words = text.split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
+  
+  // Don't compress timing - use full duration
+  const effectiveTotalMs = totalMs;
+  
   const charCounts = words.map(w => Math.max(1, w.replace(/\W/g, '').length));
   const totalChars = charCounts.reduce((a, b) => a + b, 0);
+  
+  // Calculate pause weights for punctuation (relative, not fixed)
+  const pauseWeights = words.map(word => {
+    // Check if word ends with punctuation
+    if (word.endsWith(',')) return 1.5; // 50% more time for comma
+    if (word.endsWith('.') || word.endsWith('!') || word.endsWith('?')) return 2.0; // Double time for sentence end
+    if (word.endsWith(';') || word.endsWith(':')) return 1.75; // 75% more time
+    return 1.0; // Normal timing
+  });
+  
+  // Calculate weighted durations
+  const weightedCounts = words.map((word, i) => charCounts[i] * pauseWeights[i]);
+  const totalWeightedCount = weightedCounts.reduce((a, b) => a + b, 0);
+  
   const timestamps: WordTimestamp[] = [];
   let cursor = 0;
   words.forEach((word, i) => {
-    const duration = (charCounts[i] / totalChars) * totalMs;
-    timestamps.push({ word, offsetMs: cursor, durationMs: duration });
+    const duration = (weightedCounts[i] / totalWeightedCount) * effectiveTotalMs;
+    timestamps.push({ 
+      word, 
+      offsetMs: cursor, 
+      durationMs: duration 
+    });
     cursor += duration;
   });
   return timestamps;
@@ -132,9 +154,12 @@ export async function playWithHighlights(
   let lastIdx = -1;
   let stopped = false;
 
+  // Balanced offset for better sync
+  const SYNC_OFFSET = -300;
+
   const intervalId = setInterval(() => {
     if (stopped) return;
-    const elapsed = Date.now() - startTime;
+    const elapsed = Date.now() - startTime + SYNC_OFFSET;
     if (elapsed > totalMs + 800) {
       stopped = true;
       clearInterval(intervalId);
@@ -149,7 +174,7 @@ export async function playWithHighlights(
       lastIdx = currentIdx;
       if (currentIdx >= 0) onWord(currentIdx);
     }
-  }, 50);
+  }, 25); // Balanced update frequency (25ms)
 
   if (audioUri) {
     try {
