@@ -1047,7 +1047,17 @@ export default function CameraScreen() {
     );
   }
 
-  // Camera view
+  // Camera view — fixed 4:3 aspect ratio so the viewfinder matches what gets captured
+  const cameraWidth = width;
+  const cameraHeight = Math.round(width * (4 / 3));
+  const headerHeight = 100; // paddingTop 50 + paddingBottom 5 + ~45 content
+  const bottomControlsHeight = 110; // bottom 30 + button ~80
+  const availableHeight = height - headerHeight - bottomControlsHeight;
+  // If the 4:3 box is taller than available space, constrain to available and derive width
+  const finalCameraHeight = Math.min(cameraHeight, availableHeight);
+  const finalCameraWidth = Math.round(finalCameraHeight * (3 / 4));
+  const bandHeight = Math.max(0, (availableHeight - finalCameraHeight) / 2);
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -1057,18 +1067,42 @@ export default function CameraScreen() {
         <Text style={styles.headerTitle}>Braille Scanner</Text>
       </View>
 
-      <CameraView 
-        ref={cameraRef} 
-        style={styles.camera} 
-        facing="back"
-        flash={flashMode}
-      />
+      {/* Top scope band */}
+      <View style={[styles.scopeBand, { height: Math.max(bandHeight, 44) }]}>
+        <View style={styles.scopeBandContent}>
+          <View style={styles.scopeIndicatorDot} />
+          <Text style={styles.scopeBandText}>Outside capture area</Text>
+          <View style={styles.scopeIndicatorDot} />
+        </View>
+      </View>
 
-      <View style={styles.cameraOverlay}>
-        <Text style={styles.overlayText}>Position Braille paper in frame</Text>
-        <Text style={[styles.overlayText, { marginTop: 8, fontSize: 12 }]}>
-          Algorithm 1: First-Order Spatial Derivative Filtering
-        </Text>
+      {/* Camera — exact 4:3 capture area */}
+      <View style={[styles.cameraWrapper, { width: finalCameraWidth, height: finalCameraHeight, alignSelf: 'center' }]}>
+        <CameraView
+          ref={cameraRef}
+          style={{ width: finalCameraWidth, height: finalCameraHeight }}
+          facing="back"
+          flash={flashMode}
+        />
+        {/* Corner brackets showing capture boundary */}
+        <View style={styles.captureFrame} pointerEvents="none">
+          <View style={[styles.capCorner, styles.capTopLeft]} />
+          <View style={[styles.capCorner, styles.capTopRight]} />
+          <View style={[styles.capCorner, styles.capBottomLeft]} />
+          <View style={[styles.capCorner, styles.capBottomRight]} />
+        </View>
+        <View style={styles.cameraOverlay} pointerEvents="none">
+          <Text style={styles.overlayText}>Position Braille paper in frame</Text>
+        </View>
+      </View>
+
+      {/* Bottom scope band */}
+      <View style={[styles.scopeBand, { height: Math.max(bandHeight, 44) }]}>
+        <View style={styles.scopeBandContent}>
+          <View style={styles.scopeIndicatorDot} />
+          <Text style={styles.scopeBandText}>Outside capture area</Text>
+          <View style={styles.scopeIndicatorDot} />
+        </View>
       </View>
 
       <View style={styles.bottomControls}>
@@ -1099,15 +1133,80 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
   placeholder: { width: 40 },
   placeholderButton: { width: 60 },
-  camera: { flex: 1 },
-  cameraOverlay: { position: 'absolute', top: 120, width: '100%', alignItems: 'center' },
+  // Scope bands — clearly mark areas outside the capture region
+  scopeBand: {
+    width: '100%',
+    backgroundColor: 'rgba(0,0,0,0.82)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scopeBandContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  scopeIndicatorDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.35)',
+  },
+  scopeBandText: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 11,
+    fontWeight: '500',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  // Camera wrapper — constrains to exact 4:3 capture ratio
+  cameraWrapper: {
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  cameraOverlay: {
+    position: 'absolute',
+    bottom: 16,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    pointerEvents: 'none',
+  },
   overlayText: {
-    color: '#fff', fontSize: 14, opacity: 0.8,
-    backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
+    color: '#fff', fontSize: 13, opacity: 0.9,
+    backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
+  },
+  // Corner bracket overlay on the live viewfinder
+  captureFrame: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+  },
+  capCorner: {
+    position: 'absolute',
+    width: 24,
+    height: 24,
+    borderColor: '#DC143C',
+  },
+  capTopLeft: {
+    top: 12, left: 12,
+    borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 5,
+  },
+  capTopRight: {
+    top: 12, right: 12,
+    borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 5,
+  },
+  capBottomLeft: {
+    bottom: 12, left: 12,
+    borderBottomWidth: 3, borderLeftWidth: 3, borderBottomLeftRadius: 5,
+  },
+  capBottomRight: {
+    bottom: 12, right: 12,
+    borderBottomWidth: 3, borderRightWidth: 3, borderBottomRightRadius: 5,
   },
   bottomControls: {
-    position: 'absolute', bottom: 30, width: '100%',
+    height: 110,
+    width: '100%',
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 30,
+    backgroundColor: '#000',
   },
   galleryButton: { alignItems: 'center' },
   galleryText: { color: '#fff', fontSize: 11, marginTop: 4 },
