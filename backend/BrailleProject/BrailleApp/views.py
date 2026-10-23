@@ -1,16 +1,23 @@
+import base64
+import io
+import re
+import shutil
+from pathlib import Path
+import subprocess
+import sys
+
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from .models import *
 from .serializer import *
 from PIL import Image as PILImage
 from PIL import ImageEnhance, ImageFilter
 from .image_processing import process_braille_image
-import io
 import cv2
 import numpy as np
-import base64
 
 
 # ─── FOLDER VIEWSET ────────────────────────────────────────────
@@ -609,7 +616,26 @@ class ImageViewSet(viewsets.ViewSet):
                 image_name=image_name,
                 output_text=output_text
             )
-            
+
+            distorted_dir = Path(settings.BASE_DIR).parent.parent / 'preprocessing' / 'distorted'
+            distorted_dir.mkdir(parents=True, exist_ok=True)
+            file_extension = Path(image.image_path.name).suffix or '.jpg'
+            distorted_name = str(image_name).strip()
+            if Path(distorted_name).suffix.lower() == file_extension.lower():
+                distorted_name = Path(distorted_name).stem
+            distorted_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', distorted_name).strip(' .')
+            if not distorted_name:
+                distorted_name = f'image_{image.image_id}'
+            distorted_path = distorted_dir / f'{distorted_name}{file_extension}'
+            duplicate_index = 2
+            while distorted_path.exists():
+                distorted_path = distorted_dir / f'{distorted_name}_{duplicate_index}{file_extension}'
+                duplicate_index += 1
+            shutil.copyfile(
+                image.image_path.path,
+                distorted_path
+            )
+
             serializer = ImageSerializer(image)
             data = serializer.data
             if data.get('image_path'):
@@ -804,3 +830,125 @@ class ImageViewSet(viewsets.ViewSet):
             'status': 'success',
             'message': f'Image "{image_name}" permanently deleted'
         }, status=status.HTTP_200_OK)
+
+# class ProcessBrailleViewSet(viewsets.ViewSet):
+#     @action(detail=False, methods=['POST'])
+#     def process(self, request):
+#         print("\n" + "="*60)
+#         print("🚀 DEBUG: PROCESS BRAILLE ENDPOINT HIT")
+#         print("="*60)
+        
+#         try:
+#             image_file = request.FILES.get('image')
+#             if not image_file:
+#                 print("❌ DEBUG: No image file in request")
+#                 return Response({"error": "No image provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+#             # 1. Define paths
+#             project_root = Path(settings.BASE_DIR).parent.parent
+#             preprocessing_dir = project_root / 'preprocessing'
+            
+#             print(f"📂 DEBUG: Project Root: {project_root}")
+#             print(f"📂 DEBUG: Preprocessing Dir: {preprocessing_dir}")
+#             print(f"❓ DEBUG: Preprocessing Dir exists? {preprocessing_dir.exists()}")
+
+#             # 2. Save uploaded image to the 'distorted' folder
+#             distorted_dir = preprocessing_dir / 'distorted'
+#             distorted_dir.mkdir(parents=True, exist_ok=True)
+#             distorted_path = distorted_dir / 'capture.jpg'
+            
+#             with open(distorted_path, 'wb+') as destination:
+#                 for chunk in image_file.chunks():
+#                     destination.write(chunk)
+            
+#             print(f"💾 DEBUG: Saved uploaded image to: {distorted_path}")
+            
+#             # 3. Locate the script
+#             run_script_path = preprocessing_dir / 'run.py'
+            
+#             print(f"🔍 DEBUG: Looking for script at: {run_script_path}")
+#             print(f"❓ DEBUG: Does script exist? {run_script_path.exists()}")
+            
+#             if not run_script_path.exists():
+#                 print(f"❌ DEBUG: Script NOT found! Checking directory contents...")
+#                 if preprocessing_dir.exists():
+#                     for f in preprocessing_dir.iterdir():
+#                         print(f"   - Found: {f.name}")
+#                 return Response({
+#                     "error": f"Script not found at {run_script_path}. Check terminal for contents."
+#                 }, status=status.HTTP_404_NOT_FOUND)
+
+#             # 4. Run the pipeline
+#             print(f"▶️ DEBUG: Executing command: {sys.executable} {run_script_path}")
+#             try:
+#                 # Run using subprocess
+#                 result = subprocess.run(
+#                     [sys.executable, str(run_script_path)], 
+#                     check=True, 
+#                     cwd=str(preprocessing_dir),
+#                     capture_output=True,  # Capture stdout/stderr
+#                     text=True             # Return strings instead of bytes
+#                 )
+#                 print("✅ DEBUG: Pipeline executed successfully.")
+#                 print("--- PIPELINE STDOUT ---")
+#                 print(result.stdout)
+#                 print("-----------------------")
+                
+#             except subprocess.CalledProcessError as e:
+#                 print(f"❌ DEBUG: Pipeline CRASHED with exit code {e.returncode}")
+#                 print("--- PIPELINE ERROR OUTPUT ---")
+#                 print(e.stderr)
+#                 print("-----------------------------")
+#                 return Response({"error": f"Pipeline failed. Check Django terminal for details."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                
+#             # 5. Grab the outputs
+#             processed_img_path = preprocessing_dir / 'enhanced_geo' / 'capture.jpg'
+#             text_output_path = preprocessing_dir / 'train' / 'outputs' / 'capture.txt'
+            
+#             print(f"🔍 DEBUG: Looking for Output Image: {processed_img_path}")
+#             print(f"❓ DEBUG: Image exists? {processed_img_path.exists()}")
+#             print(f"🔍 DEBUG: Looking for Output Text: {text_output_path}")
+#             print(f"❓ DEBUG: Text exists? {text_output_path.exists()}")
+
+#             if not processed_img_path.exists() or not text_output_path.exists():
+#                 print("❌ DEBUG: Outputs not found! Checking folder contents...")
+                
+#                 # Check enhanced_geo
+#                 if (preprocessing_dir / 'enhanced_geo').exists():
+#                     print("   Files in enhanced_geo:")
+#                     for f in (preprocessing_dir / 'enhanced_geo').iterdir():
+#                         print(f"   - {f.name}")
+                
+#                 # Check train/outputs
+#                 if (preprocessing_dir / 'train' / 'outputs').exists():
+#                     print("   Files in train/outputs:")
+#                     for f in (preprocessing_dir / 'train' / 'outputs').iterdir():
+#                         print(f"   - {f.name}")
+
+#                 return Response({
+#                     "error": "Pipeline outputs not found. Check Django terminal to see actual filenames.",
+#                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+#             # 6. Convert to Base64
+#             print("📦 DEBUG: Converting outputs to Base64...")
+#             with open(processed_img_path, "rb") as img_file:
+#                 img_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+                
+#             with open(text_output_path, "r", encoding="utf-8") as txt_file:
+#                 extracted_text = txt_file.read()
+
+#             print("🎉 DEBUG: Success! Sending response to React Native.")
+#             print("="*60 + "\n")
+            
+#             return Response({
+#                 "status": "success",
+#                 "processed_image": img_base64,
+#                 "text": extracted_text
+#             }, status=status.HTTP_200_OK)
+
+#         except Exception as e:
+#             print(f"💥 DEBUG: Unexpected Error: {str(e)}")
+#             import traceback
+#             traceback.print_exc()
+#             print("="*60 + "\n")
+#             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

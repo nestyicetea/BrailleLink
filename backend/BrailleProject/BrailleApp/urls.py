@@ -9,6 +9,8 @@ router = DefaultRouter()
 router.register(r'folders', FolderViewSet, basename='folder')
 router.register(r'images', ImageViewSet, basename='image')
 router.register(r'algorithm1', Algorithm1ViewSet, basename='algorithm1')
+# router.register(r'process-braille', ProcessBrailleViewSet, basename='process-braille')
+
 
 urlpatterns = [
     # Include router URLs

@@ -4,7 +4,6 @@ import {
   ActivityIndicator, Modal, TextInput, ScrollView, Dimensions, Animated, FlatList
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import type { FlashMode } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import AxiosInstance from '../axios';
@@ -51,7 +50,7 @@ export default function CameraScreen() {
   const [selectedPhotoIndices, setSelectedPhotoIndices] = useState<number[]>([]);
   const [batchSaveMode, setBatchSaveMode] = useState<'all' | 'selected' | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [flashMode, setFlashMode] = useState<FlashMode>('off');
+  const [flashMode, setFlashMode] = useState<'off' | 'torch' | 'auto'>('off');
   const [saveType, setSaveType] = useState<'image' | 'text'>('image');
   const [dewarpProgress, setDewarpProgress] = useState(0);
   const [useApiScanner, setUseApiScanner] = useState(true);
@@ -449,24 +448,28 @@ export default function CameraScreen() {
   };
 
   const toggleFlash = () => {
-    if (flashMode === 'off') {
-      setFlashMode('on');
-    } else if (flashMode === 'on') {
-      setFlashMode('auto');
-    } else {
-      setFlashMode('off');
-    }
+    setFlashMode((mode) => {
+      if (mode === 'off') return 'torch';
+      if (mode === 'torch') return 'auto';
+      return 'off';
+    });
   };
 
   const getFlashIcon = () => {
     if (flashMode === 'off') return 'flash-off-outline';
-    if (flashMode === 'on') return 'flash-outline';
+    if (flashMode === 'torch') return 'flashlight';
     return 'flash-outline';
   };
 
   const getFlashColor = () => {
     if (flashMode === 'off') return '#fff';
     return '#FFD700';
+  };
+
+  const getFlashLabel = () => {
+    if (flashMode === 'torch') return 'Torch on';
+    if (flashMode === 'auto') return 'Flash auto';
+    return 'Flash off';
   };
 
   const pickImage = async () => {
@@ -1082,7 +1085,8 @@ export default function CameraScreen() {
           ref={cameraRef}
           style={{ width: finalCameraWidth, height: finalCameraHeight }}
           facing="back"
-          flash={flashMode}
+          flash={flashMode === 'torch' ? 'off' : flashMode}
+          enableTorch={flashMode === 'torch'}
         />
         {/* Corner brackets showing capture boundary */}
         <View style={styles.captureFrame} pointerEvents="none">
@@ -1115,8 +1119,14 @@ export default function CameraScreen() {
           <View style={styles.captureButtonInner} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.flashButton} onPress={toggleFlash}>
+        <TouchableOpacity
+          style={styles.flashButton}
+          onPress={toggleFlash}
+          accessibilityRole="button"
+          accessibilityLabel={getFlashLabel()}
+        >
           <Ionicons name={getFlashIcon()} size={24} color={getFlashColor()} />
+          <Text style={styles.flashText}>{flashMode === 'torch' ? 'Torch' : flashMode === 'auto' ? 'Auto' : 'Off'}</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -1217,12 +1227,14 @@ const styles = StyleSheet.create({
   captureButtonInner: { width: 70, height: 70, borderRadius: 35, backgroundColor: '#fff' },
   flashButton: {
     width: 44,
-    height: 44,
+    minHeight: 54,
     borderRadius: 22,
     backgroundColor: 'rgba(0,0,0,0.5)',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 2,
   },
+  flashText: { color: '#fff', fontSize: 10, fontWeight: '600' },
 
   // Preview
   previewContainer: { flex: 1, backgroundColor: '#fff' },
