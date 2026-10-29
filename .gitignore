@@ -2,3 +2,7 @@ dataset/
 train/
 train_outputs/
 runs/
+backup/
+distorted/
+extracurricular_activities/
+preprocessing/

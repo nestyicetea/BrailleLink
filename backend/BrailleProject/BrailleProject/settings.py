@@ -37,6 +37,7 @@ DEBUG = True
 
 ALLOWED_HOSTS = [
     os.getenv('ALLOWED_HOST'),
+    '.vercel.app',   
     'localhost',
     '127.0.0.1'
 ]
