@@ -1,0 +1,21 @@
+# Ignore heavy folders that are NOT part of the frontend build
+/dataset/
+/preprocessing/
+/backend/
+/brenv/
+/distorted/
+/backup/
+/.vscode/
+/.sixth/
+/extracurricular_activities/
+
+# Ignore Git history (saves 22GB!)
+/.git/
+
+# Ignore Python files/venvs in the root
+*.txt
+*.json
+*.whl
+
+# CRITICAL: Keep the frontend folder
+!/frontend/
