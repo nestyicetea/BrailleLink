@@ -4,35 +4,32 @@ import {
   ActivityIndicator, Modal, TextInput, ScrollView, Dimensions, Animated, FlatList
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Accelerometer } from 'expo-sensors';
 import * as ImagePicker from 'expo-image-picker';
+import Slider from '@react-native-community/slider';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import AxiosInstance from '../axios';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as ImageManipulator from 'expo-image-manipulator';
-import { synthesizeSpeech, playWithHighlights, type WordTimestamp } from '../utils/azureTts';
+import { synthesizeSpeech, playWithHighlights } from '../utils/azureTts';
+import { useDisplay } from '../context/DisplayContext';
 
 const { width, height } = Dimensions.get('window');
 const DEFAULT_FOLDER_KEY = 'default_folder_id';
 
-// Sample outputs shown until the translation model is connected.
-const SAMPLE_OUTPUTS = [
-  `Maagang dumating ang mga mag-aaral sa silid-aralan upang maghanda para sa kanilang bagong aralin. Ipinaliwanag ng guro na ang bawat pahina ay may mahalagang kuwento at kaalaman na maaaring matutuhan. Sa pamamagitan ng pakikinig at pagtutulungan, naging mas madali para sa lahat ang pag-unawa sa aralin.`,
-  `The students arrived early in the classroom and prepared their notebooks for a new lesson. Their teacher explained that every page can offer useful knowledge and encourage careful thinking. By listening to one another and working together, the class found that learning becomes easier and more enjoyable.`,
-  `Maagang pumasok ang mga estudyante para maghanda sa kanilang lesson. The teacher reminded them that every page can teach something useful, kaya mahalagang magbasa at mag-isip nang mabuti. Sa pamamagitan ng teamwork and sharing ideas, mas naging madali para sa buong klase ang pagkatuto.`,
-];
-
-const getSampleOutput = (photoIndex: number) => SAMPLE_OUTPUTS[photoIndex % SAMPLE_OUTPUTS.length];
+// Tolerance for "perfectly flat" (in g). Lower = stricter.
+const LEVEL_TOLERANCE = 0.08;
 
 export default function CameraScreen() {
+  const { fontScale, fontWeight, theme, setFontScale, setFontWeight } = useDisplay();
   const cameraRef = useRef<any>(null);
-  const [kernelSize] = useState(3);
   const flatListRef = useRef<any>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [image, setImage] = useState<string | null>(null);
   const [batchImageUris, setBatchImageUris] = useState<string[]>([]);
   const [batchProcessedImageUris, setBatchProcessedImageUris] = useState<string[]>([]);
+  const [batchTextOutputs, setBatchTextOutputs] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [folders, setFolders] = useState<any[]>([]);
   const [selectedFolder, setSelectedFolder] = useState<number | null>(null);
@@ -42,10 +39,9 @@ export default function CameraScreen() {
   const [newFolderName, setNewFolderName] = useState('');
   const [imageName, setImageName] = useState('');
   const [isScanning, setIsScanning] = useState(false);
-  const [isDewarping, setIsDewarping] = useState(false);
   const [showButtons, setShowButtons] = useState(false);
+  const [processingError, setProcessingError] = useState<string | null>(null);
   const [pendingImageUri, setPendingImageUri] = useState<string | null>(null);
-  const [processedImageUri, setProcessedImageUri] = useState<string | null>(null);
   const [pendingText, setPendingText] = useState<string | null>(null);
   const [selectedPhotoIndices, setSelectedPhotoIndices] = useState<number[]>([]);
   const [batchSaveMode, setBatchSaveMode] = useState<'all' | 'selected' | null>(null);
@@ -53,38 +49,49 @@ export default function CameraScreen() {
   const [flashMode, setFlashMode] = useState<'off' | 'torch' | 'auto'>('off');
   const [saveType, setSaveType] = useState<'image' | 'text'>('image');
   const [dewarpProgress, setDewarpProgress] = useState(0);
-  const [useApiScanner, setUseApiScanner] = useState(true);
-  const [isZooming, setIsZooming] = useState(false);
+  const [showReferencePage, setShowReferencePage] = useState(false);
+  const [referenceCountdown, setReferenceCountdown] = useState(3);
+  const [showOutputSettings, setShowOutputSettings] = useState(false);
   const [isReadingAudioEnabled, setIsReadingAudioEnabled] = useState(false);
-  const [activeWordIndex, setActiveWordIndex] = useState(-1);
   const ttsCleanupRef = useRef<(() => void) | null>(null);
   const ttsLoadingRef = useRef(false);
-  const [preprocessedImageUri, setPreprocessedImageUri] = useState<string | null>(null);
-  const [showFilteredResult, setShowFilteredResult] = useState(false);
 
+  // Level state from accelerometer
+  const [isLevel, setIsLevel] = useState(false);
+  const [tilt, setTilt] = useState({ x: 0, y: 0 });
 
-  const scanAnimation = useRef(new Animated.Value(0)).current;
-  const dewarpAnimation = useRef(new Animated.Value(0)).current;
-  const zoomAnimation = useRef(new Animated.Value(1)).current;
-  const fadeAnimation = useRef(new Animated.Value(0)).current;
+  const [scanAnimation] = useState(() => new Animated.Value(0));
+  const [dewarpAnimation] = useState(() => new Animated.Value(0));
 
+  // Accelerometer subscription — tracks tilt and updates isLevel
   useEffect(() => {
-    requestPermission();
-    loadFolders();
-    loadDefaultFolder();
+    Accelerometer.setUpdateInterval(100);
+    const subscription = Accelerometer.addListener(({ x, y }) => {
+      setTilt({ x, y });
+      const flat = Math.abs(x) < LEVEL_TOLERANCE && Math.abs(y) < LEVEL_TOLERANCE;
+      setIsLevel(flat);
+    });
+    return () => subscription.remove();
   }, []);
 
   useEffect(() => {
-    // Stop any current playback when slide or toggle changes
+    if (!showReferencePage || referenceCountdown <= 0) return undefined;
+
+    const timer = setTimeout(() => {
+      setReferenceCountdown((countdown) => Math.max(0, countdown - 1));
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [showReferencePage, referenceCountdown]);
+
+  useEffect(() => {
     if (ttsCleanupRef.current) {
       ttsCleanupRef.current();
       ttsCleanupRef.current = null;
     }
-    setActiveWordIndex(-1);
-
-    const isTextSlide = currentIndex % 2 === 1;
-    const photoIndex = Math.floor(currentIndex / 2);
-    const textToSpeak = isTextSlide ? getSampleOutput(photoIndex) : null;
+    const isTextSlide = currentIndex % 3 === 2;
+    const photoIndex = Math.floor(currentIndex / 3);
+    const textToSpeak = isTextSlide ? batchTextOutputs[photoIndex] : null;
 
     if (!isReadingAudioEnabled || !textToSpeak) return;
 
@@ -98,8 +105,8 @@ export default function CameraScreen() {
           audioUri,
           wordTimestamps,
           totalMs,
-          (idx) => { if (!cancelled) setActiveWordIndex(idx); },
-          () => { if (!cancelled) setActiveWordIndex(-1); },
+          () => {},
+          () => {},
           textToSpeak,
         ).then((cleanup) => {
           if (cancelled) { cleanup(); return; }
@@ -119,18 +126,8 @@ export default function CameraScreen() {
         ttsCleanupRef.current();
         ttsCleanupRef.current = null;
       }
-      setActiveWordIndex(-1);
     };
-  }, [currentIndex, isReadingAudioEnabled]);
-
-  const loadDefaultFolder = async () => {
-    try {
-      const saved = await AsyncStorage.getItem(DEFAULT_FOLDER_KEY);
-      if (saved) setDefaultFolderId(Number(saved));
-    } catch (e) {
-      console.error('Failed to load default folder', e);
-    }
-  };
+  }, [batchTextOutputs, currentIndex, isReadingAudioEnabled]);
 
   const saveDefaultFolder = async (folderId: number | null) => {
     try {
@@ -161,216 +158,25 @@ export default function CameraScreen() {
     scanAnimation.stopAnimation();
   };
 
-  const startDewarpAnimation = () => {
-    setIsDewarping(true);
-    setIsZooming(false);
-    dewarpAnimation.setValue(0);
-    zoomAnimation.setValue(1.15);
-    fadeAnimation.setValue(0);
-    
-    Animated.parallel([
-      Animated.timing(dewarpAnimation, {
-        toValue: 1,
-        duration: 1500,
-        useNativeDriver: true,
-      }),
-      Animated.timing(zoomAnimation, {
-        toValue: 1.25,
-        duration: 1500,
-        useNativeDriver: true,
-      }),
-      Animated.timing(fadeAnimation, {
-        toValue: 1,
-        duration: 1500,
-        useNativeDriver: true,
-      })
-    ]).start(() => {
-      setShowFilteredResult(true);
-      setShowButtons(true);
-      setIsDewarping(false);
-      setIsZooming(true);
-      
-      Animated.parallel([
-        Animated.timing(zoomAnimation, {
-          toValue: 1,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-        Animated.timing(fadeAnimation, {
-          toValue: 0,
-          duration: 700,
-          useNativeDriver: true,
-        })
-      ]).start(() => {
-        setIsZooming(false);
-        stopDewarpAnimation();
-      });
+  useEffect(() => {
+    void requestPermission().catch((error) => {
+      console.error('Camera permission request failed:', error);
     });
-  };
-
-  const stopDewarpAnimation = () => {
-    setIsDewarping(false);
-    dewarpAnimation.stopAnimation();
-    zoomAnimation.stopAnimation();
-    fadeAnimation.stopAnimation();
-  };
-
-  /**
-   * Apply Algorithm 1: First-Order Spatial Derivative Shadow Gradient Filtering
-   * 
-   * This algorithm suppresses background clutter (folds, edges, lighting variations)
-   * while preserving Braille dots using gradient-based filtering.
-   * 
-   * Mathematical formulation:
-   * Gx = I * Kx = ∂I/∂x    (Horizontal gradient)
-   * Gy = I * Ky = ∂I/∂y    (Vertical gradient)
-   * M(x,y) = √(Gx² + Gy²)  (Gradient magnitude)
-   * θ(x,y) = tan⁻¹(Gy/Gx)  (Orientation angle)
-   */
-  const applyBrailleGradientFilter = async (imageUri: string): Promise<string> => {
-    try {
-      setDewarpProgress(10);
-      
-      const formData = new FormData();
-      const filename = imageUri.split('/').pop() || 'image.jpg';
-      
-      formData.append('image', {
-        uri: imageUri,
-        name: filename,
-        type: 'image/jpeg',
-      } as any);
-      formData.append('kernel_size', String(kernelSize)); 
-      
-      setDewarpProgress(30);
-      
-      // Send to backend for Algorithm 1 processing
-      const response = await AxiosInstance.post('/algorithm1/process/', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        timeout: 30000,
+    void AxiosInstance.get('/folders/')
+      .then((response) => {
+        if (response.data?.folders) setFolders(response.data.folders);
+      })
+      .catch((error) => {
+        console.error('Error loading folders:', error);
       });
-      
-      setDewarpProgress(70);
-      
-      console.log('Algorithm 1 Response:', response.data);
-      
-      if (response.data && response.data.status === 'success') {
-        const originalDir = imageUri.substring(0, imageUri.lastIndexOf('/') + 1);
-
-        // Save Stage 1 preprocessed (background-leveled) image
-        if (response.data.preprocessed_image) {
-          const preprocessedUri = originalDir + `preprocessed_${Date.now()}.jpg`;
-          await FileSystem.writeAsStringAsync(preprocessedUri, response.data.preprocessed_image, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-          setPreprocessedImageUri(preprocessedUri);
-          setDewarpProgress(100);
-          return preprocessedUri;
-        }
-        
-        throw new Error('No image data in response');
-      }
-      
-      throw new Error('Algorithm 1 processing failed');
-      
-    } catch (error) {
-      console.error('Algorithm 1 processing error:', error);
-      // Return original image as fallback
-      return imageUri;
-    }
-  };
-
-  // API-based document scanner with Algorithm 1 integration
-  const processImageWithScannerAPI = async (imageUri: string): Promise<string> => {
-    try {
-      setDewarpProgress(10);
-      
-      // Step 1: Apply Algorithm 1 - Gradient-based filtering
-      const filteredUri = await applyBrailleGradientFilter(imageUri);
-      
-      setDewarpProgress(60);
-      
-      // Step 2: Further enhance the filtered image if needed
-      if (filteredUri !== imageUri) {
-        const enhanced = await ImageManipulator.manipulateAsync(
-          filteredUri,
-          [
-            { resize: { width: 1000 } },
-          ],
-          { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
-        );
-        
-        setDewarpProgress(100);
-        return enhanced.uri;
-      }
-      
-      // If no filtering was applied, return the enhanced original
-      const enhanced = await ImageManipulator.manipulateAsync(
-        imageUri,
-        [
-          { resize: { width: 1000 } },
-        ],
-        { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
-      );
-      
-      setDewarpProgress(100);
-      return enhanced.uri;
-      
-    } catch (error) {
-      console.error('Scanner API error:', error);
-      return imageUri;
-    }
-  };
-
-  // Local processing with Algorithm 1
-  const processImageLocally = async (imageUri: string): Promise<string> => {
-    try {
-      setDewarpProgress(20);
-      
-      // Apply Algorithm 1 via backend
-      const filteredUri = await applyBrailleGradientFilter(imageUri);
-      
-      setDewarpProgress(60);
-      
-      // Apply enhancements
-      const enhanced = await ImageManipulator.manipulateAsync(
-        filteredUri,
-        [
-          { resize: { width: 1200 } },
-        ],
-        { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG }
-      );
-      
-      setDewarpProgress(80);
-      
-      // Final resize
-      const final = await ImageManipulator.manipulateAsync(
-        enhanced.uri,
-        [
-          { resize: { width: 1000 } },
-        ],
-        { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG }
-      );
-      
-      setDewarpProgress(100);
-      return final.uri;
-    } catch (error) {
-      console.error('Local processing error:', error);
-      return imageUri;
-    }
-  };
-
-  const loadFolders = async () => {
-    try {
-      const response = await AxiosInstance.get('/folders/');
-      if (response.data && response.data.folders) {
-        setFolders(response.data.folders);
-      }
-    } catch (error) {
-      console.error('Error loading folders:', error);
-    }
-  };
+    void AsyncStorage.getItem(DEFAULT_FOLDER_KEY)
+      .then((saved) => {
+        if (saved) setDefaultFolderId(Number(saved));
+      })
+      .catch((error) => {
+        console.error('Failed to load default folder:', error);
+      });
+  }, [requestPermission]);
 
   const uploadToBackend = async (
     imageUri: string,
@@ -382,19 +188,15 @@ export default function CameraScreen() {
     try {
       const formData = new FormData();
       if (folderId) formData.append('folder', folderId.toString());
-
       const filename = imageUri.split('/').pop() || '';
       const match = /\.(\w+)$/.exec(filename);
       const type = match ? `image/${match[1]}` : 'image/jpeg';
-
       formData.append('image', { uri: imageUri, name: `captured_${Date.now()}.jpg`, type } as any);
       formData.append('image_name', name || `Capture_${new Date().toLocaleString()}`);
-      if (outputText) formData.append('output_text', outputText);
-
+      if (outputText !== undefined) formData.append('output_text', outputText);
       const response = await AxiosInstance.post('/images/', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-
       return response.data && response.data.status === 'success';
     } catch (error) {
       console.error('Upload error:', error);
@@ -404,44 +206,91 @@ export default function CameraScreen() {
     }
   };
 
-  const handleCapture = async (uri: string) => {
-    setImage(uri);
-    setBatchImageUris([uri]);
-    setBatchProcessedImageUris([]);
-    setPendingImageUri(uri);
-    setProcessedImageUri(uri);
-    setPreprocessedImageUri(null);
-    setPendingText(null);
-    setShowButtons(true);
-    setCurrentIndex(0);
-    setDewarpProgress(100);
-    setShowFilteredResult(false);
-    setIsZooming(false);
-  };
-
-  const handleBatchCapture = async (uris: string[]) => {
+  const processCapturedPhotos = async (uris: string[]) => {
     if (uris.length === 0) return;
 
     setImage(uris[0]);
     setBatchImageUris(uris);
     setBatchProcessedImageUris([]);
+    setBatchTextOutputs([]);
     setPendingImageUri(uris[0]);
-    setProcessedImageUri(uris[0]);
-    setPreprocessedImageUri(null);
     setPendingText(null);
-    setShowButtons(true);
+    setProcessingError(null);
+    setShowButtons(false);
     setCurrentIndex(0);
-    setDewarpProgress(100);
-    setShowFilteredResult(false);
-    setIsZooming(false);
+    setDewarpProgress(5);
+    startScanAnimation();
+
+    try {
+      const processedUris: string[] = [];
+      const textOutputs: string[] = [];
+
+      for (let index = 0; index < uris.length; index += 1) {
+        const uri = uris[index];
+        const filename = uri.split('/').pop() || `capture_${index + 1}.jpg`;
+        const formData = new FormData();
+        formData.append('image', {
+          uri,
+          name: filename,
+          type: 'image/jpeg',
+        } as any);
+
+        const response = await AxiosInstance.post('/algorithm1/preprocess/', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: 660000,
+        });
+        const imageBase64 = response.data?.processed_image_base64;
+        const outputText = response.data?.output_text;
+        if (response.data?.status !== 'success'
+          || typeof imageBase64 !== 'string'
+          || typeof outputText !== 'string') {
+          throw new Error(response.data?.message || 'The preprocessing response was incomplete.');
+        }
+
+        const outputDirectory = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+        if (!outputDirectory) throw new Error('No local storage is available for the processed image.');
+        const processedUri = `${outputDirectory}braille-output-${Date.now()}-${index}.png`;
+        await FileSystem.writeAsStringAsync(processedUri, imageBase64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        processedUris.push(processedUri);
+        textOutputs.push(outputText);
+        setDewarpProgress(Math.round(((index + 1) / uris.length) * 100));
+      }
+
+      setBatchProcessedImageUris(processedUris);
+      setBatchTextOutputs(textOutputs);
+      setPendingText(textOutputs[0]);
+      setShowButtons(true);
+    } catch (error) {
+      console.error('Braille preprocessing failed:', error);
+      setProcessingError(
+        'The photo could not be processed. Check that the backend is running and try again.'
+      );
+    } finally {
+      stopScanAnimation();
+    }
+  };
+
+  const handleCapture = async (uri: string) => {
+    await processCapturedPhotos([uri]);
+  };
+
+  const handleBatchCapture = async (uris: string[]) => {
+    await processCapturedPhotos(uris);
   };
 
   const takePicture = async () => {
+    if (!isLevel) {
+      Alert.alert('Not level', 'Tilt your phone until it is perfectly flat over the page.');
+      return;
+    }
     if (cameraRef.current) {
       try {
         const photo = await cameraRef.current.takePictureAsync({ quality: 0.8 });
         await handleCapture(photo.uri);
       } catch (error) {
+        console.error('Failed to take picture:', error);
         Alert.alert('Error', 'Failed to take picture');
       }
     }
@@ -485,32 +334,67 @@ export default function CameraScreen() {
     }
   };
 
+  const openReferencePage = () => {
+    setReferenceCountdown(3);
+    setShowReferencePage(true);
+  };
+
+  const confirmReferenceAndPickImage = async () => {
+    if (referenceCountdown > 0) return;
+    setShowReferencePage(false);
+    await pickImage();
+  };
+
   type Slide =
-    | { id: number; source: any; uri: string; label: string; isLocal: boolean; type: 'image' }
-    | { id: number; text: string; label: string; isLocal: boolean; type: 'text' };
+    | {
+        id: number;
+        source: { uri: string };
+        uri: string;
+        label: string;
+        type: 'image';
+        photoIndex: number;
+        imageRole: 'original' | 'processed';
+      }
+    | { id: number; text: string; label: string; type: 'text'; photoIndex: number };
 
   const slides: Slide[] = image
-    ? (batchImageUris.length > 0 ? batchImageUris : [image]).flatMap((uri, index) => [
-        {
-          id: index * 2 + 1,
-          source: { uri: showFilteredResult ? (batchProcessedImageUris[index] || uri) : uri },
-          uri: batchProcessedImageUris[index] || uri,
-          label: `Photo ${index + 1}`,
-          isLocal: false,
-          type: 'image' as const,
-        },
-        {
-          id: index * 2 + 2,
-          text: getSampleOutput(index),
-          label: `Output ${index + 1}`,
-          isLocal: true,
-          type: 'text' as const,
-        },
-      ])
+    ? batchImageUris.flatMap((uri, photoIndex) => {
+        const processedUri = batchProcessedImageUris[photoIndex];
+        const outputText = batchTextOutputs[photoIndex];
+        if (!processedUri || outputText === undefined) return [];
+        return [
+          {
+            id: photoIndex * 3,
+            source: { uri },
+            uri,
+            label: `Original photo ${photoIndex + 1}`,
+            type: 'image' as const,
+            photoIndex,
+            imageRole: 'original' as const,
+          },
+          {
+            id: photoIndex * 3 + 1,
+            source: { uri: processedUri },
+            uri: processedUri,
+            label: `Processed image ${photoIndex + 1}`,
+            type: 'image' as const,
+            photoIndex,
+            imageRole: 'processed' as const,
+          },
+          {
+            id: photoIndex * 3 + 2,
+            text: outputText,
+            label: `Text output ${photoIndex + 1}`,
+            type: 'text' as const,
+            photoIndex,
+          },
+        ];
+      })
     : [];
 
   const handleSavePress = () => {
     const currentSlide = slides[currentIndex];
+    if (!currentSlide) return;
     setBatchSaveMode(null);
 
     if (batchImageUris.length > 1) {
@@ -522,24 +406,19 @@ export default function CameraScreen() {
       return;
     }
 
-    const name = `${currentSlide.label}_${Date.now()}`;
+    const name = `${currentSlide.label.replace(/\s+/g, '_')}_${Date.now()}`;
     setImageName(name);
     setSelectedFolder(defaultFolderId);
-    
+
     if (currentSlide.type === 'text') {
       setSaveType('text');
-      setPendingText(currentSlide.text ?? null);
+      setPendingText(currentSlide.text);
+      setPendingImageUri(batchImageUris[currentSlide.photoIndex] || image);
       setShowSaveModal(true);
     } else {
-      setPendingImageUri(currentSlide.uri ?? null);
-      const pairedOutput = slides[currentIndex + 1];
-      if (pairedOutput?.type === 'text') {
-        setSaveType('text');
-        setPendingText(pairedOutput.text);
-      } else {
-        setSaveType('image');
-        setPendingText(null);
-      }
+      setPendingImageUri(batchImageUris[currentSlide.photoIndex] || image);
+      setSaveType('text');
+      setPendingText(batchTextOutputs[currentSlide.photoIndex] ?? null);
       setShowSaveModal(true);
     }
   };
@@ -556,44 +435,35 @@ export default function CameraScreen() {
         ? batchImageUris.map((_, index) => index)
         : selectedPhotoIndices;
       let savedCount = 0;
-
       for (const photoIndex of photoIndices) {
         const photoUri = batchImageUris[photoIndex];
-        if (photoUri && await uploadToBackend(
+        const outputText = batchTextOutputs[photoIndex];
+        if (photoUri && outputText !== undefined && await uploadToBackend(
           photoUri,
           selectedFolder,
           `${imageName}_Photo_${photoIndex + 1}`,
-          getSampleOutput(photoIndex),
-        )) {
-          savedCount += 1;
-        }
+          outputText,
+        )) savedCount += 1;
       }
-
       if (savedCount === photoIndices.length) {
         setBatchSaveMode(null);
         setShowSaveModal(false);
-        Alert.alert(
-          'Success',
+        Alert.alert('Success',
           `${savedCount} photo and text twin${savedCount === 1 ? '' : 's'} saved!`,
-          [{ text: 'OK', onPress: () => router.replace('/dashboard') }],
-        );
+          [{ text: 'OK', onPress: () => router.replace('/dashboard') }]);
       } else {
         Alert.alert('Warning', `${savedCount} of ${photoIndices.length} twins were saved.`);
       }
-    } else if (saveType === 'text' && pendingText) {
-      const photoIndex = Math.floor(currentIndex / 2);
+    } else if (saveType === 'text' && pendingText !== null) {
+      const photoIndex = Math.floor(currentIndex / 3);
       const photoUri = batchImageUris[photoIndex] || image;
       const photoSaved = photoUri
         ? await uploadToBackend(photoUri, selectedFolder, imageName, pendingText)
         : false;
-
       if (photoSaved) {
         setShowSaveModal(false);
-        Alert.alert(
-          'Success',
-          'Photo and text output saved as one item!',
-          [{ text: 'OK', onPress: () => router.replace('/dashboard') }],
-        );
+        Alert.alert('Success', 'Photo and text output saved as one item!',
+          [{ text: 'OK', onPress: () => router.replace('/dashboard') }]);
       } else {
         Alert.alert('Error', 'Failed to save photo and text output. Please try again.');
       }
@@ -601,11 +471,8 @@ export default function CameraScreen() {
       const success = await uploadToBackend(pendingImageUri, selectedFolder, imageName);
       if (success) {
         setShowSaveModal(false);
-        Alert.alert(
-          'Success',
-          'Image saved successfully!',
-          [{ text: 'OK', onPress: () => router.replace('/dashboard') }],
-        );
+        Alert.alert('Success', 'Image saved successfully!',
+          [{ text: 'OK', onPress: () => router.replace('/dashboard') }]);
       } else {
         Alert.alert('Error', 'Failed to save image. Please try again.');
       }
@@ -618,9 +485,9 @@ export default function CameraScreen() {
     setImage(null);
     setBatchImageUris([]);
     setBatchProcessedImageUris([]);
+    setBatchTextOutputs([]);
+    setProcessingError(null);
     setPendingImageUri(null);
-    setProcessedImageUri(null);
-    setPreprocessedImageUri(null);
     setPendingText(null);
     setSelectedPhotoIndices([]);
     setBatchSaveMode(null);
@@ -628,10 +495,7 @@ export default function CameraScreen() {
     setShowSaveModal(false);
     setCurrentIndex(0);
     setDewarpProgress(0);
-    setShowFilteredResult(false);
-    setIsZooming(false);
     stopScanAnimation();
-    stopDewarpAnimation();
   };
 
   const createNewFolder = async () => {
@@ -650,35 +514,28 @@ export default function CameraScreen() {
         Alert.alert('Success', 'Folder created');
       }
     } catch (error) {
+      console.error('Failed to create folder:', error);
       Alert.alert('Error', 'Failed to create folder');
     }
   };
 
-  const renderItem = ({ item }: { item: any }) => (
+  const renderItem = ({ item }: { item: Slide }) => (
     <View style={styles.slideContainer}>
       {item.type === 'image' ? (
         <View style={styles.imageFrameWrapper}>
           <View style={styles.imageContainerInner}>
-            <Animated.Image 
-              source={item.source} 
-              style={[
-                styles.fullImage, 
-                {
-                  transform: [{ scale: zoomAnimation }],
-                  opacity: isDewarping ? fadeAnimation : 1
-                }
-              ]} 
-              resizeMode="contain" 
+            <Animated.Image
+              source={item.source}
+              style={styles.fullImage}
+              resizeMode="contain"
             />
           </View>
-          {/* Algorithm 1 processing indicator */}
           <View style={styles.algorithmBadge} pointerEvents="none">
             <Ionicons name="analytics-outline" size={14} color="#fff" />
             <Text style={styles.algorithmBadgeText}>
-              Original image
+              {item.imageRole === 'original' ? 'Original photo' : 'Final processed image'}
             </Text>
           </View>
-          {/* Clean outline overlay */}
           <View style={styles.straightenOutline} pointerEvents="none">
             <View style={[styles.cornerBracket, styles.cornerTopLeft]} />
             <View style={[styles.cornerBracket, styles.cornerTopRight]} />
@@ -688,16 +545,16 @@ export default function CameraScreen() {
           <View style={styles.straightenedBadge} pointerEvents="none">
             <Ionicons name="checkmark-circle" size={14} color="#fff" />
             <Text style={styles.straightenedBadgeText}>
-              Processing disconnected
+              {item.imageRole === 'original' ? 'Captured image' : 'Preprocessing complete'}
             </Text>
           </View>
-          {batchImageUris.length > 1 ? (
+          {batchImageUris.length > 1 && item.imageRole === 'original' ? (
             <TouchableOpacity
               style={styles.photoSelectionCheckbox}
-              onPress={() => togglePhotoSelection((item.id - 1) / 2)}
+              onPress={() => togglePhotoSelection(item.photoIndex)}
             >
               <Ionicons
-                name={selectedPhotoIndices.includes((item.id - 1) / 2) ? 'checkbox' : 'square-outline'}
+                name={selectedPhotoIndices.includes(item.photoIndex) ? 'checkbox' : 'square-outline'}
                 size={28}
                 color="#fff"
               />
@@ -709,21 +566,12 @@ export default function CameraScreen() {
           <View style={styles.textHeaderRow}>
             <View style={styles.textHeaderLeft}>
               <View style={styles.textAudioBadge}>
-                <Animated.View
-                  style={[
-                    styles.audioWave,
-                    {
-                      opacity: isReadingAudioEnabled ? 1 : 0.35,
-                      transform: [
-                        {
-                          scaleY: isReadingAudioEnabled
-                            ? dewarpAnimation.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1.15] })
-                            : 1,
-                        },
-                      ],
-                    },
-                  ]}
-                />
+                <Animated.View style={[styles.audioWave, {
+                  opacity: isReadingAudioEnabled ? 1 : 0.35,
+                  transform: [{ scaleY: isReadingAudioEnabled
+                    ? dewarpAnimation.interpolate({ inputRange: [0, 1], outputRange: [0.75, 1.15] })
+                    : 1 }],
+                }]} />
                 <Ionicons
                   name={isReadingAudioEnabled ? 'volume-high' : 'volume-mute-outline'}
                   size={16}
@@ -732,6 +580,14 @@ export default function CameraScreen() {
                 <Text style={styles.audioBadgeText}>{isReadingAudioEnabled ? 'Reading' : 'Read aloud'}</Text>
               </View>
             </View>
+            <TouchableOpacity
+              onPress={() => setShowOutputSettings(true)}
+              style={styles.outputSettingsButton}
+              accessibilityRole="button"
+              accessibilityLabel="Open transcript display settings"
+            >
+              <Ionicons name="settings-outline" size={20} color="#DC143C" />
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setIsReadingAudioEnabled((enabled) => !enabled)}
               style={[styles.audioToggleButton, isReadingAudioEnabled && styles.audioToggleButtonActive]}
@@ -747,18 +603,19 @@ export default function CameraScreen() {
             </TouchableOpacity>
           </View>
           <ScrollView contentContainerStyle={styles.textScrollContent}>
-            <Text style={styles.translatedText}>
-              {item.text.split(/\s+/).filter(Boolean).map((word: string, wi: number) => (
-                <Text
-                  key={wi}
-                  style={[
-                    styles.translatedText,
-                    activeWordIndex === wi && isReadingAudioEnabled ? styles.readingWordActive : null,
-                  ]}
-                >
-                  {word}{' '}
-                </Text>
-              ))}
+            <Text
+              style={[
+                styles.translatedText,
+                {
+                  fontSize: 14 * fontScale,
+                  lineHeight: 22 * fontScale,
+                  fontWeight: fontWeight.toString() as '400' | '500' | '600' | '700' | '800',
+                  color: theme.text,
+                },
+              ]}
+              selectable
+            >
+              {item.text}
             </Text>
             {isReadingAudioEnabled ? <View style={styles.readingProgressPulse} /> : null}
           </ScrollView>
@@ -791,73 +648,98 @@ export default function CameraScreen() {
     );
   }
 
+  if (showReferencePage) {
+    return (
+      <View style={styles.referencePage}>
+        <View style={styles.referenceHeader}>
+          <TouchableOpacity
+            onPress={() => setShowReferencePage(false)}
+            style={styles.backButton}
+            accessibilityRole="button"
+            accessibilityLabel="Return to camera"
+          >
+            <Ionicons name="arrow-back" size={24} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Photo Capture Guide</Text>
+          <View style={styles.referenceHeaderSpacer} />
+        </View>
+        <Text style={styles.referenceTitle}>For a clear Braille scan</Text>
+        <Text style={styles.referenceDescription}>
+          Review this guide before choosing your photo.
+        </Text>
+        <Image
+          source={require('../assets/images/reference.jpg')}
+          style={styles.referenceImage}
+          resizeMode="contain"
+          accessibilityLabel="Guide showing correct and incorrect ways to capture Braille paper"
+        />
+        <TouchableOpacity
+          style={[
+            styles.referenceConfirmButton,
+            referenceCountdown > 0 && styles.referenceConfirmButtonDisabled,
+          ]}
+          onPress={confirmReferenceAndPickImage}
+          disabled={referenceCountdown > 0}
+          accessibilityRole="button"
+        >
+          <Text style={styles.referenceConfirmButtonText}>
+            {referenceCountdown > 0 ? `I Understand (${referenceCountdown})` : 'I Understand'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   if (image) {
     return (
       <View style={styles.previewContainer}>
-        {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={handleRetake} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Algorithm 1: Braille Enhancement</Text>
+          <Text style={styles.headerTitle}>Braille Processing Results</Text>
         </View>
 
-        {/* Scanning phase OR Dewarping phase OR Carousel phase */}
         {isScanning ? (
           <View style={styles.imageContainer}>
             <Image source={{ uri: image }} style={styles.fullImagePreview} resizeMode="cover" />
             <View style={styles.scanningOverlay}>
               <Animated.View style={[styles.scanLine, {
-                transform: [{
-                  translateY: scanAnimation.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [-height / 2.5, height / 2.5],
-                  })
-                }]
+                transform: [{ translateY: scanAnimation.interpolate({
+                  inputRange: [0, 1], outputRange: [-height / 2.5, height / 2.5]
+                }) }]
               }]} />
-              <Text style={styles.scanningText}>Applying Algorithm 1...</Text>
-              <Text style={styles.scanningSubText}>First-Order Spatial Derivative Filtering</Text>
+              <Text style={styles.scanningText}>Processing Braille paper...</Text>
+              <Text style={styles.scanningSubText}>Running preprocessing and transcription models</Text>
               <View style={styles.progressContainer}>
                 <View style={[styles.progressBar, { width: `${dewarpProgress}%` }]} />
               </View>
               <Text style={styles.progressText}>{dewarpProgress}%</Text>
             </View>
           </View>
-        ) : isDewarping ? (
+        ) : processingError ? (
           <View style={styles.imageContainer}>
-            <Image source={{ uri: processedImageUri || image }} style={styles.fullImagePreview} resizeMode="cover" />
-            <View style={styles.dewarpOverlay}>
-              <Animated.View style={[styles.dewarpGrid, {
-                opacity: dewarpAnimation.interpolate({
-                  inputRange: [0, 0.3, 0.7, 1],
-                  outputRange: [0.8, 1, 0.6, 0]
-                })
-              }]}>
-                {[...Array(8)].map((_, index) => (
-                  <Animated.View key={index} style={[styles.gridLine, {
-                    transform: [{
-                      scaleY: dewarpAnimation.interpolate({
-                        inputRange: [0, 0.5, 1],
-                        outputRange: [1, 1.2, 1]
-                      })
-                    }]
-                  }]} />
-                ))}
-              </Animated.View>
-              <View style={styles.dewarpStatus}>
-                <ActivityIndicator size="large" color="#DC143C" />
-                <Text style={styles.dewarpText}>Processing Braille Image</Text>
-                <Text style={styles.dewarpSubText}>Background leveling & illumination compensation</Text>
-                <View style={styles.progressContainer}>
-                  <View style={[styles.progressBar, { width: `${dewarpProgress}%` }]} />
-                </View>
-                <Text style={styles.progressText}>{dewarpProgress}%</Text>
+            <Image source={{ uri: image }} style={styles.fullImagePreview} resizeMode="contain" />
+            <View style={styles.scanningOverlay}>
+              <Ionicons name="alert-circle-outline" size={40} color="#fff" />
+              <Text style={styles.scanningText}>Braille processing failed</Text>
+              <Text style={styles.scanningSubText}>{processingError}</Text>
+              <View style={styles.twoButtonsContainer}>
+                <TouchableOpacity
+                  style={styles.saveButtonLarge}
+                  onPress={() => processCapturedPhotos(batchImageUris)}
+                >
+                  <Text style={[styles.buttonLargeText, { color: '#fff' }]}>Retry</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.retakeButtonLarge} onPress={handleRetake}>
+                  <Text style={styles.buttonLargeText}>Retake</Text>
+                </TouchableOpacity>
               </View>
             </View>
           </View>
         ) : showButtons ? (
           <View style={styles.carouselWrapper}>
-            <FlatList
+            <FlatList<Slide>
               ref={flatListRef}
               data={slides}
               renderItem={renderItem}
@@ -869,15 +751,11 @@ export default function CameraScreen() {
               scrollEventThrottle={16}
               style={{ flex: 1 }}
             />
-
-            {/* Label + Counter */}
             <View style={styles.counterContainer}>
               <Text style={styles.counterText}>
                 {slides[currentIndex]?.label}{'  '}{currentIndex + 1} / {slides.length}
               </Text>
             </View>
-
-            {/* Save & Retake */}
             <View style={styles.twoButtonsContainer}>
               <TouchableOpacity style={styles.saveButtonLarge} onPress={handleSavePress}>
                 <Ionicons name="save-outline" size={18} color="#fff" />
@@ -893,7 +771,6 @@ export default function CameraScreen() {
           </View>
         ) : null}
 
-        {/* Save Modal */}
         <Modal
           visible={showSaveModal}
           transparent
@@ -910,8 +787,6 @@ export default function CameraScreen() {
                   <Ionicons name="close" size={24} color="#8E8E93" />
                 </TouchableOpacity>
               </View>
-
-              {/* File Name */}
               <View style={styles.inputWithIcon}>
                 <Text style={styles.inputLabel}>
                   {saveType === 'text' ? 'File Name' : 'Image Name'}
@@ -930,8 +805,6 @@ export default function CameraScreen() {
               {saveType === 'text' && (
                 <Text style={styles.fileExtensionHint}>.txt will be added automatically</Text>
               )}
-
-              {/* Folder List */}
               <View style={styles.inputWithIcon}>
                 <Text style={styles.inputLabel}>Select Folder</Text>
                 <TouchableOpacity
@@ -949,10 +822,8 @@ export default function CameraScreen() {
                 {folders.map((folder) => (
                   <TouchableOpacity
                     key={folder.folder_id}
-                    style={[
-                      styles.folderOption,
-                      selectedFolder === folder.folder_id && styles.folderOptionSelected,
-                    ]}
+                    style={[styles.folderOption,
+                      selectedFolder === folder.folder_id && styles.folderOptionSelected]}
                     onPress={() => setSelectedFolder(folder.folder_id)}
                   >
                     <View style={styles.folderLeft}>
@@ -977,8 +848,6 @@ export default function CameraScreen() {
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-
-              {/* Default folder hint */}
               {defaultFolderId ? (
                 <View style={styles.defaultInfo}>
                   <Ionicons name="star" size={14} color="#FFD700" />
@@ -987,8 +856,6 @@ export default function CameraScreen() {
                   </Text>
                 </View>
               ) : null}
-
-              {/* Action Buttons */}
               <View style={styles.modalButtons}>
                 <TouchableOpacity
                   style={[styles.modalButton, styles.cancelButton]}
@@ -1003,8 +870,7 @@ export default function CameraScreen() {
                 >
                   {uploading
                     ? <ActivityIndicator size="small" color="#fff" />
-                    : <Text style={styles.saveButtonText}>Save</Text>
-                  }
+                    : <Text style={styles.saveButtonText}>Save</Text>}
                 </TouchableOpacity>
               </View>
             </View>
@@ -1046,17 +912,89 @@ export default function CameraScreen() {
             </View>
           </View>
         </Modal>
+        <Modal
+          visible={showOutputSettings}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowOutputSettings(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.background }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.text }]}>Transcript Display</Text>
+                <TouchableOpacity
+                  onPress={() => setShowOutputSettings(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close transcript display settings"
+                >
+                  <Ionicons name="close" size={24} color={theme.textMuted} />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={[styles.outputSettingsLabel, { color: theme.text }]}>Font Size</Text>
+              <View style={styles.outputSettingsValueRow}>
+                <Text style={[styles.outputSettingsRangeText, { color: theme.textMuted }]}>Small</Text>
+                <Text style={[styles.outputSettingsValue, { color: theme.accent }]}>
+                  {Math.round(fontScale * 100)}%
+                </Text>
+                <Text style={[styles.outputSettingsRangeText, { color: theme.textMuted }]}>Large</Text>
+              </View>
+              <Slider
+                style={styles.outputSettingsSlider}
+                minimumValue={0.8}
+                maximumValue={1.5}
+                step={0.05}
+                value={fontScale}
+                onValueChange={setFontScale}
+                minimumTrackTintColor={theme.accent}
+                maximumTrackTintColor={theme.border}
+                thumbTintColor={theme.accent}
+              />
+
+              <Text style={[styles.outputSettingsLabel, { color: theme.text }]}>Font Weight</Text>
+              <View style={styles.outputSettingsValueRow}>
+                <Text style={[styles.outputSettingsRangeText, { color: theme.textMuted }]}>Default</Text>
+                <Text style={[styles.outputSettingsValue, { color: theme.accent }]}>
+                  {fontWeight === 400 ? 'Default' : fontWeight === 500 ? 'Medium'
+                    : fontWeight === 600 ? 'Semi Bold' : fontWeight === 700 ? 'Bold' : 'Extra Bold'}
+                </Text>
+                <Text style={[styles.outputSettingsRangeText, { color: theme.textMuted }]}>Extra Bold</Text>
+              </View>
+              <Slider
+                style={styles.outputSettingsSlider}
+                minimumValue={400}
+                maximumValue={800}
+                step={100}
+                value={fontWeight}
+                onValueChange={setFontWeight}
+                minimumTrackTintColor={theme.accent}
+                maximumTrackTintColor={theme.border}
+                thumbTintColor={theme.accent}
+              />
+
+              <Text
+                style={[
+                  styles.outputSettingsPreview,
+                  {
+                    color: theme.text,
+                    fontSize: 14 * fontScale,
+                    fontWeight: fontWeight.toString() as '400' | '500' | '600' | '700' | '800',
+                  },
+                ]}
+              >
+                Braille transcription preview
+              </Text>
+            </View>
+          </View>
+        </Modal>
       </View>
     );
   }
 
-  // Camera view — fixed 4:3 aspect ratio so the viewfinder matches what gets captured
-  const cameraWidth = width;
   const cameraHeight = Math.round(width * (4 / 3));
-  const headerHeight = 100; // paddingTop 50 + paddingBottom 5 + ~45 content
-  const bottomControlsHeight = 110; // bottom 30 + button ~80
+  const headerHeight = 100;
+  const bottomControlsHeight = 110;
   const availableHeight = height - headerHeight - bottomControlsHeight;
-  // If the 4:3 box is taller than available space, constrain to available and derive width
   const finalCameraHeight = Math.min(cameraHeight, availableHeight);
   const finalCameraWidth = Math.round(finalCameraHeight * (3 / 4));
   const bandHeight = Math.max(0, (availableHeight - finalCameraHeight) / 2);
@@ -1070,7 +1008,6 @@ export default function CameraScreen() {
         <Text style={styles.headerTitle}>Braille Scanner</Text>
       </View>
 
-      {/* Top scope band */}
       <View style={[styles.scopeBand, { height: Math.max(bandHeight, 44) }]}>
         <View style={styles.scopeBandContent}>
           <View style={styles.scopeIndicatorDot} />
@@ -1079,7 +1016,6 @@ export default function CameraScreen() {
         </View>
       </View>
 
-      {/* Camera — exact 4:3 capture area */}
       <View style={[styles.cameraWrapper, { width: finalCameraWidth, height: finalCameraHeight, alignSelf: 'center' }]}>
         <CameraView
           ref={cameraRef}
@@ -1088,19 +1024,44 @@ export default function CameraScreen() {
           flash={flashMode === 'torch' ? 'off' : flashMode}
           enableTorch={flashMode === 'torch'}
         />
-        {/* Corner brackets showing capture boundary */}
-        <View style={styles.captureFrame} pointerEvents="none">
-          <View style={[styles.capCorner, styles.capTopLeft]} />
-          <View style={[styles.capCorner, styles.capTopRight]} />
-          <View style={[styles.capCorner, styles.capBottomLeft]} />
-          <View style={[styles.capCorner, styles.capBottomRight]} />
+
+        {/* Level overlay guides + live indicator */}
+        <View style={styles.levelOverlay} pointerEvents="none">
+          <View style={[styles.levelBracket, styles.levelTopLeft,
+            { borderColor: isLevel ? '#00FF00' : '#ffffff' }]} />
+          <View style={[styles.levelBracket, styles.levelTopRight,
+            { borderColor: isLevel ? '#00FF00' : '#ffffff' }]} />
+          <View style={[styles.levelBracket, styles.levelBottomLeft,
+            { borderColor: isLevel ? '#00FF00' : '#ffffff' }]} />
+          <View style={[styles.levelBracket, styles.levelBottomRight,
+            { borderColor: isLevel ? '#00FF00' : '#ffffff' }]} />
+
+          <View style={styles.levelCrosshairContainer}>
+            <Animated.View style={[styles.levelCrosshair, {
+              transform: [
+                { translateX: tilt.x * 200 },
+                { translateY: tilt.y * 200 },
+              ],
+            }]} />
+          </View>
+
+          <View style={[styles.levelStatusPill, { backgroundColor: isLevel ? 'rgba(0,200,83,0.9)' : 'rgba(0,0,0,0.65)' }]}>
+            <Ionicons
+              name={isLevel ? 'checkmark-circle' : 'move-outline'}
+              size={16}
+              color="#fff"
+            />
+            <Text style={styles.levelStatusText}>
+              {isLevel ? 'Level — ready to capture' : 'Tilt phone flat to enable capture'}
+            </Text>
+          </View>
         </View>
+
         <View style={styles.cameraOverlay} pointerEvents="none">
           <Text style={styles.overlayText}>Position Braille paper in frame</Text>
         </View>
       </View>
 
-      {/* Bottom scope band */}
       <View style={[styles.scopeBand, { height: Math.max(bandHeight, 44) }]}>
         <View style={styles.scopeBandContent}>
           <View style={styles.scopeIndicatorDot} />
@@ -1110,13 +1071,19 @@ export default function CameraScreen() {
       </View>
 
       <View style={styles.bottomControls}>
-        <TouchableOpacity style={styles.galleryButton} onPress={pickImage}>
+        <TouchableOpacity style={styles.galleryButton} onPress={openReferencePage}>
           <Ionicons name="images-outline" size={28} color="#fff" />
           <Text style={styles.galleryText}>Gallery</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.captureButton} onPress={takePicture}>
-          <View style={styles.captureButtonInner} />
+        <TouchableOpacity
+          style={[styles.captureButton, { opacity: isLevel ? 1 : 0.4 }]}
+          onPress={takePicture}
+          disabled={!isLevel}
+          accessibilityLabel="Take picture"
+          accessibilityState={{ disabled: !isLevel }}
+        >
+          <View style={[styles.captureButtonInner, isLevel && styles.captureButtonInnerReady]} />
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -1126,7 +1093,9 @@ export default function CameraScreen() {
           accessibilityLabel={getFlashLabel()}
         >
           <Ionicons name={getFlashIcon()} size={24} color={getFlashColor()} />
-          <Text style={styles.flashText}>{flashMode === 'torch' ? 'Torch' : flashMode === 'auto' ? 'Auto' : 'Off'}</Text>
+          <Text style={styles.flashText}>
+            {flashMode === 'torch' ? 'Torch' : flashMode === 'auto' ? 'Auto' : 'Off'}
+          </Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -1135,88 +1104,48 @@ export default function CameraScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
+  referencePage: { flex: 1, backgroundColor: '#fff', alignItems: 'center' },
+  referenceHeader: {
+    width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingTop: 50, paddingBottom: 5, paddingHorizontal: 20, backgroundColor: '#DC143C',
+  },
+  referenceHeaderSpacer: { width: 40 },
+  referenceTitle: {
+    marginTop: 18, paddingHorizontal: 20, color: '#222', fontSize: 20, fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  referenceDescription: {
+    marginTop: 6, paddingHorizontal: 20, color: '#666', fontSize: 14, textAlign: 'center',
+  },
+  referenceImage: { flex: 1, width: width - 24, marginVertical: 10 },
+  referenceConfirmButton: {
+    minHeight: 52, width: width - 48, marginBottom: 24, borderRadius: 12,
+    backgroundColor: '#DC143C', alignItems: 'center', justifyContent: 'center',
+  },
+  referenceConfirmButtonDisabled: { backgroundColor: '#9e9e9e' },
+  referenceConfirmButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingTop: 50, paddingBottom: 5, paddingHorizontal: 20, backgroundColor: '#DC143C',
   },
   backButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
-  placeholder: { width: 40 },
-  placeholderButton: { width: 60 },
-  // Scope bands — clearly mark areas outside the capture region
-  scopeBand: {
-    width: '100%',
-    backgroundColor: 'rgba(0,0,0,0.82)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  scopeBandContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  scopeIndicatorDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.35)',
-  },
+  scopeBand: { width: '100%', backgroundColor: 'rgba(0,0,0,0.82)', alignItems: 'center', justifyContent: 'center' },
+  scopeBandContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  scopeIndicatorDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.35)' },
   scopeBandText: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 11,
-    fontWeight: '500',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
+    color: 'rgba(255,255,255,0.5)', fontSize: 11, fontWeight: '500',
+    letterSpacing: 0.5, textTransform: 'uppercase',
   },
-  // Camera wrapper — constrains to exact 4:3 capture ratio
-  cameraWrapper: {
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  cameraOverlay: {
-    position: 'absolute',
-    bottom: 16,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    pointerEvents: 'none',
-  },
+  cameraWrapper: { overflow: 'hidden', position: 'relative' },
+  cameraOverlay: { position: 'absolute', bottom: 16, left: 0, right: 0, alignItems: 'center' },
   overlayText: {
     color: '#fff', fontSize: 13, opacity: 0.9,
     backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
   },
-  // Corner bracket overlay on the live viewfinder
-  captureFrame: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-  },
-  capCorner: {
-    position: 'absolute',
-    width: 24,
-    height: 24,
-    borderColor: '#DC143C',
-  },
-  capTopLeft: {
-    top: 12, left: 12,
-    borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 5,
-  },
-  capTopRight: {
-    top: 12, right: 12,
-    borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 5,
-  },
-  capBottomLeft: {
-    bottom: 12, left: 12,
-    borderBottomWidth: 3, borderLeftWidth: 3, borderBottomLeftRadius: 5,
-  },
-  capBottomRight: {
-    bottom: 12, right: 12,
-    borderBottomWidth: 3, borderRightWidth: 3, borderBottomRightRadius: 5,
-  },
   bottomControls: {
-    height: 110,
-    width: '100%',
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 30,
-    backgroundColor: '#000',
+    height: 110, width: '100%', flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', paddingHorizontal: 30, backgroundColor: '#000',
   },
   galleryButton: { alignItems: 'center' },
   galleryText: { color: '#fff', fontSize: 11, marginTop: 4 },
@@ -1225,247 +1154,225 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.3)', justifyContent: 'center', alignItems: 'center',
   },
   captureButtonInner: { width: 70, height: 70, borderRadius: 35, backgroundColor: '#fff' },
+  captureButtonInnerReady: { borderColor: '#00C853', borderWidth: 4 },
   flashButton: {
-    width: 44,
-    minHeight: 54,
-    borderRadius: 22,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 2,
+    width: 44, minHeight: 54, borderRadius: 22, backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center', justifyContent: 'center', gap: 2,
   },
   flashText: { color: '#fff', fontSize: 10, fontWeight: '600' },
 
-  // Preview
-  previewContainer: { flex: 1, backgroundColor: '#fff' },
-  imageContainer: { flex: 1, position: 'relative', backgroundColor: '#000' },
-  fullImagePreview: {
-    width: width - 20, height: height * 0.6,
-    alignSelf: 'center', marginTop: 10, borderRadius: 8,
-  },
-
-  // Carousel wrapper
-  carouselWrapper: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-  },
-  slideContainer: {
-    width: width,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  imageFrameWrapper: {
-    width: width - 20,
-    height: height * 0.7,
-    borderRadius: 8,
-    position: 'relative',
-    backgroundColor: '#fff',
-    overflow: 'hidden',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  imageContainerInner: {
-    width: '100%',
-    height: '100%',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-    backgroundColor: '#fff',
-  },
-  fullImage: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 0,
-  },
-  photoSelectionCheckbox: {
+  // Level/gyro overlay styles
+  levelOverlay: {
     position: 'absolute',
-    right: 16,
-    bottom: 16,
-    padding: 7,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0,0,0,0.65)',
+    top: 0, left: 0, right: 0, bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  straightenOutline: {
+  levelBracket: {
     position: 'absolute',
-    top: 20,
-    left: 20,
-    right: 20,
-    bottom: 20,
+    width: 26,
+    height: 26,
+    borderColor: '#fff',
+  },
+  levelTopLeft:    { top: 14, left: 14, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 6 },
+  levelTopRight:   { top: 14, right: 14, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 6 },
+  levelBottomLeft: { bottom: 14, left: 14, borderBottomWidth: 3, borderLeftWidth: 3, borderBottomLeftRadius: 6 },
+  levelBottomRight:{ bottom: 14, right: 14, borderBottomWidth: 3, borderRightWidth: 3, borderBottomRightRadius: 6 },
+  levelCrosshairContainer: {
+    width: 160,
+    height: 160,
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.9,
+  },
+  levelCrosshair: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     borderWidth: 2,
-    borderColor: '#ffffff',
-    borderRadius: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.35,
-    shadowRadius: 3,
+    borderColor: 'rgba(255,255,255,0.85)',
+    backgroundColor: 'rgba(0,0,0,0.25)',
   },
-  cornerBracket: {
+  levelStatusPill: {
     position: 'absolute',
-    width: 22,
-    height: 22,
-    borderColor: '#DC143C',
-  },
-  cornerTopLeft: {
-    top: -2,
-    left: -2,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
-    borderTopLeftRadius: 6,
-  },
-  cornerTopRight: {
-    top: -2,
-    right: -2,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
-    borderTopRightRadius: 6,
-  },
-  cornerBottomLeft: {
-    bottom: -2,
-    left: -2,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
-    borderBottomLeftRadius: 6,
-  },
-  cornerBottomRight: {
-    bottom: -2,
-    right: -2,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
-    borderBottomRightRadius: 6,
-  },
-  straightenedBadge: {
-    position: 'absolute',
-    top: 28,
-    right: 28,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 14,
-    gap: 5,
-  },
-  straightenedBadgeText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  algorithmBadge: {
-    position: 'absolute',
-    top: 28,
-    left: 28,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(220, 20, 60, 0.85)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 14,
-    gap: 5,
-  },
-  algorithmBadgeText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  textContainer: {
-    width: width - 40,
-    height: height * 0.7,
-    backgroundColor: '#ffffff',
-    borderRadius: 8,
-    padding: 16,
-    paddingTop: 16,
-    gap: 12,
-  },
-  textHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  textHeaderLeft: {
-    flex: 1,
-  },
-  textAudioBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    gap: 8,
-    backgroundColor: '#F7F7F7',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-  },
-  audioWave: {
-    width: 4,
-    height: 12,
-    borderRadius: 2,
-    backgroundColor: '#DC143C',
-  },
-  audioBadgeText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#1A1A1A',
-  },
-  audioToggleButton: {
+    top: 12,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#DC143C',
-    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    maxWidth: '90%',
   },
-  audioToggleButtonActive: {
-    backgroundColor: '#DC143C',
-  },
-  audioToggleText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#DC143C',
-  },
-  audioToggleTextActive: {
+  levelStatusText: {
     color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
   },
-  textScrollContent: {
-    flexGrow: 1,
-    alignItems: 'flex-start',
-    justifyContent: 'flex-start',
+
+  // Distance zone guides — three nested corner-box zones
+  zoneOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  tooFarBox: {
+    position: 'absolute',
+    top: '20%', bottom: '20%', left: '18%', right: '18%',
+  },
+  tooFarLabel: {
+    position: 'absolute',
+    top: -22, left: 0,
+    color: '#FFA500',
+    fontSize: 11,
+    fontWeight: 'bold',
+    letterSpacing: 1,
+    textShadowColor: 'rgba(0,0,0,0.9)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  balancedBox: {
+    position: 'absolute',
+    top: '10%', bottom: '10%', left: '8%', right: '8%',
+  },
+  balancedLabel: {
+    position: 'absolute',
+    top: -22, left: 0,
+    color: '#00C853',
+    fontSize: 11,
+    fontWeight: 'bold',
+    letterSpacing: 1,
+    textShadowColor: 'rgba(0,0,0,0.9)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  tooCloseBox: {
+    position: 'absolute',
+    top: '3%', bottom: '3%', left: '2%', right: '2%',
+  },
+  tooCloseLabel: {
+    position: 'absolute',
+    bottom: -22, left: 0,
+    color: '#DC143C',
+    fontSize: 11,
+    fontWeight: 'bold',
+    letterSpacing: 1,
+    textShadowColor: 'rgba(0,0,0,0.9)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  zoneCorner: {
+    position: 'absolute',
+    width: 22,
+    height: 22,
+  },
+  cornerTl: { top: 0, left: 0, borderTopWidth: 3, borderLeftWidth: 3, borderTopLeftRadius: 4 },
+  cornerTr: { top: 0, right: 0, borderTopWidth: 3, borderRightWidth: 3, borderTopRightRadius: 4 },
+  cornerBl: { bottom: 0, left: 0, borderBottomWidth: 3, borderLeftWidth: 3, borderBottomLeftRadius: 4 },
+  cornerBr: { bottom: 0, right: 0, borderBottomWidth: 3, borderRightWidth: 3, borderBottomRightRadius: 4 },
+
+  previewContainer: { flex: 1, backgroundColor: '#fff' },
+  imageContainer: { flex: 1, position: 'relative', backgroundColor: '#000' },
+  fullImagePreview: {
+    width: width - 20, height: height * 0.6, alignSelf: 'center', marginTop: 10, borderRadius: 8,
+  },
+  carouselWrapper: { flex: 1, backgroundColor: '#ffffff' },
+  slideContainer: { width: width, alignItems: 'center', justifyContent: 'center' },
+  imageFrameWrapper: {
+    width: width - 20, height: height * 0.7, borderRadius: 8, position: 'relative',
+    backgroundColor: '#fff', overflow: 'hidden', justifyContent: 'center', alignItems: 'center',
+  },
+  imageContainerInner: {
+    width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center',
+    padding: 20, backgroundColor: '#fff',
+  },
+  fullImage: { width: '100%', height: '100%', borderRadius: 0 },
+  photoSelectionCheckbox: {
+    position: 'absolute', right: 16, bottom: 16, padding: 7,
+    borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.65)',
+  },
+  straightenOutline: {
+    position: 'absolute', top: 20, left: 20, right: 20, bottom: 20,
+    borderWidth: 2, borderColor: '#ffffff', borderRadius: 4,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35, shadowRadius: 3,
+  },
+  cornerBracket: { position: 'absolute', width: 22, height: 22, borderColor: '#DC143C' },
+  cornerTopLeft: { top: -2, left: -2, borderTopWidth: 4, borderLeftWidth: 4, borderTopLeftRadius: 6 },
+  cornerTopRight: { top: -2, right: -2, borderTopWidth: 4, borderRightWidth: 4, borderTopRightRadius: 6 },
+  cornerBottomLeft: { bottom: -2, left: -2, borderBottomWidth: 4, borderLeftWidth: 4, borderBottomLeftRadius: 6 },
+  cornerBottomRight: { bottom: -2, right: -2, borderBottomWidth: 4, borderRightWidth: 4, borderBottomRightRadius: 6 },
+  straightenedBadge: {
+    position: 'absolute', top: 28, right: 28, flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)', paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 14, gap: 5,
+  },
+  straightenedBadgeText: { color: '#fff', fontSize: 11, fontWeight: '600' },
+  algorithmBadge: {
+    position: 'absolute', top: 28, left: 28, flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(220, 20, 60, 0.85)', paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: 14, gap: 5,
+  },
+  algorithmBadgeText: { color: '#fff', fontSize: 11, fontWeight: '600' },
+  textContainer: {
+    width: width - 40, height: height * 0.7, backgroundColor: '#ffffff',
+    borderRadius: 8, padding: 16, paddingTop: 16, gap: 12,
+  },
+  textHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+  },
+  textHeaderLeft: { flex: 1 },
+  outputSettingsButton: {
+    width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: '#DC143C',
+  },
+  textAudioBadge: {
+    flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 8,
+    backgroundColor: '#F7F7F7', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999,
+  },
+  audioWave: { width: 4, height: 12, borderRadius: 2, backgroundColor: '#DC143C' },
+  audioBadgeText: { fontSize: 12, fontWeight: '600', color: '#1A1A1A' },
+  audioToggleButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12,
+    paddingVertical: 8, borderRadius: 999, borderWidth: 1,
+    borderColor: '#DC143C', backgroundColor: '#fff',
+  },
+  audioToggleButtonActive: { backgroundColor: '#DC143C' },
+  audioToggleText: { fontSize: 12, fontWeight: '700', color: '#DC143C' },
+  audioToggleTextActive: { color: '#fff' },
+  textScrollContent: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
   translatedText: {
-    fontSize: 14,
-    color: '#333',
-    fontFamily: 'monospace',
-    lineHeight: 22,
-    textAlign: 'left',
+    fontSize: 14, color: '#333', fontFamily: 'monospace',
+    lineHeight: 22, textAlign: 'center',
+  },
+  outputSettingsLabel: { fontSize: 14, fontWeight: '600', marginTop: 16 },
+  outputSettingsValueRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8,
+  },
+  outputSettingsRangeText: { fontSize: 12 },
+  outputSettingsValue: { fontSize: 14, fontWeight: '700' },
+  outputSettingsSlider: { width: '100%', height: 40 },
+  outputSettingsPreview: {
+    textAlign: 'center', marginTop: 14, paddingVertical: 12, paddingHorizontal: 8,
   },
   readingWordActive: {
-    backgroundColor: 'rgba(220, 20, 60, 0.18)',
-    color: '#000',
+    backgroundColor: 'rgba(220, 20, 60, 0.18)', color: '#000',
     textShadowColor: 'rgba(220, 20, 60, 0.35)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 6,
+    textShadowOffset: { width: 0, height: 0 }, textShadowRadius: 6,
   },
   readingProgressPulse: {
-    marginTop: 10,
-    height: 4,
-    borderRadius: 999,
-    backgroundColor: 'rgba(220, 20, 60, 0.35)',
-    overflow: 'hidden',
+    marginTop: 10, height: 4, borderRadius: 999,
+    backgroundColor: 'rgba(220, 20, 60, 0.35)', overflow: 'hidden',
   },
   counterContainer: {
-    alignSelf: 'center',
-    marginVertical: 10,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    borderRadius: 20,
+    alignSelf: 'center', marginVertical: 10, backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 16, paddingVertical: 6, borderRadius: 20,
   },
   counterText: { color: '#fff', fontSize: 14, fontWeight: '500' },
   twoButtonsContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 5, paddingBottom: 30, paddingTop: 10, gap: 16, marginHorizontal: 5,
+    flexDirection: 'row', paddingHorizontal: 5, paddingBottom: 30,
+    paddingTop: 10, gap: 16, marginHorizontal: 5,
   },
   saveButtonLarge: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -1477,94 +1384,72 @@ const styles = StyleSheet.create({
     paddingVertical: 14, borderRadius: 8, gap: 6,
   },
   buttonLargeText: { color: '#333', fontSize: 13, fontWeight: '500' },
-
-  // Scanning
   scanningOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center', borderRadius: 8,
   },
-  scanLine: { position: 'absolute', left: 0, right: 0, height: 2, backgroundColor: '#DC143C', width: '100%' },
+  scanLine: {
+    position: 'absolute', left: 0, right: 0, height: 2,
+    backgroundColor: '#DC143C', width: '100%',
+  },
   scanningText: { color: '#fff', fontSize: 16, marginTop: 20, fontWeight: '600' },
   scanningSubText: { color: '#ccc', fontSize: 12, marginTop: 4 },
-  
-  // Progress
   progressContainer: {
-    width: '80%',
-    height: 8,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    borderRadius: 4,
-    marginTop: 12,
-    overflow: 'hidden',
+    width: '80%', height: 8, backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 4, marginTop: 12, overflow: 'hidden',
   },
-  progressBar: {
-    height: '100%',
-    backgroundColor: '#DC143C',
-    borderRadius: 4,
-  },
-  progressText: {
-    color: '#fff',
-    fontSize: 14,
-    marginTop: 8,
-    fontWeight: '500',
-  },
-
-  // Dewarping
+  progressBar: { height: '100%', backgroundColor: '#DC143C', borderRadius: 4 },
+  progressText: { color: '#fff', fontSize: 14, marginTop: 8, fontWeight: '500' },
   dewarpOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.7)', alignItems: 'center', justifyContent: 'center', borderRadius: 8,
   },
   dewarpGrid: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    flexDirection: 'column',
-    justifyContent: 'space-around',
-    padding: 20,
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    flexDirection: 'column', justifyContent: 'space-around', padding: 20,
   },
-  gridLine: {
-    height: 1,
-    backgroundColor: 'rgba(220, 20, 60, 0.3)',
-    width: '100%',
-  },
+  gridLine: { height: 1, backgroundColor: 'rgba(220, 20, 60, 0.3)', width: '100%' },
   dewarpStatus: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    padding: 20,
-    borderRadius: 12,
+    alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', padding: 20, borderRadius: 12,
   },
   dewarpText: { color: '#fff', fontSize: 16, marginTop: 12, fontWeight: '600' },
   dewarpSubText: { color: '#ccc', fontSize: 12, marginTop: 4 },
-
-  // Modal
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  modalContent: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 20, width: '90%', maxHeight: '80%' },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  modalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF', borderRadius: 20, padding: 20, width: '90%', maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20,
+  },
   modalTitle: { fontSize: 18, fontWeight: '600', color: '#1A1A1A' },
-  inputWithIcon: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, marginTop: 12 },
+  inputWithIcon: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginBottom: 8, marginTop: 12,
+  },
   inputLabel: { fontSize: 14, fontWeight: '500', color: '#1A1A1A' },
   editIcon: { padding: 4 },
   addFolderIcon: { padding: 4, position: 'relative' },
   addFolderBadge: {
-    position: 'absolute',
-    right: 0,
-    bottom: 0,
-    width: 15,
-    height: 15,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#DC143C',
+    position: 'absolute', right: 0, bottom: 0, width: 15, height: 15,
+    borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#DC143C',
   },
-  newFolderModalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  newFolderModalContent: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 20, width: '86%' },
-  newFolderInput: { borderWidth: 1, borderColor: '#D1D1D6', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 11, color: '#1A1A1A', fontSize: 15 },
+  newFolderModalOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center',
+  },
+  newFolderModalContent: {
+    backgroundColor: '#FFFFFF', borderRadius: 20, padding: 20, width: '86%',
+  },
+  newFolderInput: {
+    borderWidth: 1, borderColor: '#D1D1D6', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 11, color: '#1A1A1A', fontSize: 15,
+  },
   newFolderModalButtons: { flexDirection: 'row', gap: 10, marginTop: 18 },
-  modalInput: { borderWidth: 1, borderColor: '#E5E5EA', borderRadius: 10, padding: 12, fontSize: 16, color: '#1A1A1A' },
+  modalInput: {
+    borderWidth: 1, borderColor: '#E5E5EA', borderRadius: 10,
+    padding: 12, fontSize: 16, color: '#1A1A1A',
+  },
   fileExtensionHint: { fontSize: 12, color: '#8E8E93', marginTop: 4, marginLeft: 4 },
   folderList: { maxHeight: 250, marginTop: 8 },
   folderOption: {
@@ -1577,7 +1462,10 @@ const styles = StyleSheet.create({
   folderName: { fontSize: 15, color: '#1A1A1A' },
   folderRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   starButton: { padding: 4 },
-  defaultInfo: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, padding: 8, backgroundColor: '#FDF5E6', borderRadius: 8 },
+  defaultInfo: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginTop: 12, padding: 8, backgroundColor: '#FDF5E6', borderRadius: 8,
+  },
   defaultInfoText: { fontSize: 12, color: '#8E8E93' },
   modalButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
   modalButton: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: 'center' },
@@ -1586,6 +1474,8 @@ const styles = StyleSheet.create({
   saveButton: { backgroundColor: '#DC143C' },
   saveButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   message: { color: '#fff', fontSize: 16, textAlign: 'center', marginTop: 50 },
-  permissionButton: { backgroundColor: '#DC143C', padding: 15, borderRadius: 10, margin: 20, alignItems: 'center' },
+  permissionButton: {
+    backgroundColor: '#DC143C', padding: 15, borderRadius: 10, margin: 20, alignItems: 'center',
+  },
   permissionButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
 });

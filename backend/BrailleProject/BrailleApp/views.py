@@ -1,7 +1,11 @@
 import base64
 import io
+import logging
+import os
 import re
 import shutil
+import tempfile
+import uuid
 from pathlib import Path
 import subprocess
 import sys
@@ -18,6 +22,8 @@ from PIL import ImageEnhance, ImageFilter
 from .image_processing import process_braille_image
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 # ─── FOLDER VIEWSET ────────────────────────────────────────────
@@ -541,6 +547,151 @@ class Algorithm1ViewSet(viewsets.ViewSet):
                 'status': 'error',
             'message': str(e)
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # POST /algorithm1/coverage/ - live distance indicator
+    @action(detail=False, methods=['POST'])
+    def coverage(self, request):
+        try:
+            f = request.FILES.get('image')
+            if not f:
+                return Response({'status': 'error', 'message': 'No image provided'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            arr = np.frombuffer(f.read(), np.uint8)
+            gray = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+            if gray is None:
+                return Response({'status': 'error', 'message': 'Bad image'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            blur = cv2.GaussianBlur(gray, (5, 5), 0)
+            _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+
+            cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not cnts:
+                return Response({'status': 'success', 'coverage': 0.0})
+
+            biggest = max(cnts, key=cv2.contourArea)
+            coverage = cv2.contourArea(biggest) / float(gray.shape[0] * gray.shape[1])
+            return Response({'status': 'success', 'coverage': float(coverage)})
+
+        except Exception as e:
+            return Response({'status': 'error', 'message': str(e)},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @action(detail=False, methods=['POST'])
+    def preprocess(self, request):
+        uploaded_file = request.FILES.get('image')
+        if not uploaded_file:
+            return Response(
+                {'status': 'error', 'message': 'No image provided'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        repository_root = Path(settings.BASE_DIR).parent.parent
+        preprocessing_dir = repository_root / 'preprocessing'
+        run_script = preprocessing_dir / 'run.py'
+        output_dir = preprocessing_dir / 'train' / 'outputs'
+
+        configured_python = os.getenv('BRAILLE_PIPELINE_PYTHON')
+        if configured_python:
+            pipeline_python = Path(configured_python)
+        else:
+            brenv_python = repository_root / 'brenv' / 'Scripts' / 'python.exe'
+            pipeline_python = brenv_python if brenv_python.is_file() else Path(sys.executable)
+
+        if not pipeline_python.is_file():
+            return Response(
+                {'status': 'error', 'message': 'The configured preprocessing Python executable was not found.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        if not run_script.is_file():
+            return Response(
+                {'status': 'error', 'message': 'The Braille preprocessing script was not found.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        capture_stem = f'capture_{uuid.uuid4().hex}'
+        output_stem = f'pred_{capture_stem}_geo'
+        output_image = output_dir / f'{output_stem}.png'
+        output_text = output_dir / f'{output_stem}.txt'
+        try:
+            temporary_root = preprocessing_dir / '.runs'
+            temporary_root.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix='capture-', dir=temporary_root) as temp_dir:
+                input_path = Path(temp_dir) / f'{capture_stem}.jpg'
+                with input_path.open('wb') as destination:
+                    for chunk in uploaded_file.chunks():
+                        destination.write(chunk)
+
+                result = subprocess.run(
+                    [
+                        str(pipeline_python),
+                        str(run_script),
+                        '--input',
+                        str(input_path),
+                        '--output-dir',
+                        str(output_dir),
+                    ],
+                    cwd=preprocessing_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    check=False,
+                )
+
+            if result.returncode != 0:
+                logger.error(
+                    'Braille preprocessing failed (exit %s): %s',
+                    result.returncode,
+                    f'{result.stdout or ""}\n{result.stderr or ""}'[-8000:],
+                )
+                return Response(
+                    {'status': 'error', 'message': 'Braille processing failed. Check the backend log for details.'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            if not output_image.is_file() or not output_text.is_file():
+                logger.error(
+                    'Braille preprocessing did not produce expected outputs: %s, %s. Output: %s',
+                    output_image,
+                    output_text,
+                    f'{result.stdout or ""}\n{result.stderr or ""}'[-8000:],
+                )
+                return Response(
+                    {'status': 'error', 'message': 'Braille processing completed without producing its image and text outputs.'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+            with output_text.open('r', encoding='utf-8', newline='') as source:
+                transcription = source.read()
+
+            return Response(
+                {
+                    'status': 'success',
+                    'processed_image_base64': base64.b64encode(output_image.read_bytes()).decode('ascii'),
+                    'output_text': transcription,
+                    'output_image_name': output_image.name,
+                    'output_text_name': output_text.name,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except subprocess.TimeoutExpired as error:
+            logger.error(
+                'Braille preprocessing timed out for %s: %s',
+                capture_stem,
+                error.stdout or error.stderr or '',
+            )
+            return Response(
+                {'status': 'error', 'message': 'Braille processing timed out. Please try again with a smaller image.'},
+                status=status.HTTP_504_GATEWAY_TIMEOUT,
+            )
+        except Exception:
+            logger.exception('Braille preprocessing failed for %s', capture_stem)
+            return Response(
+                {'status': 'error', 'message': 'Braille processing failed. Check the backend log for details.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
 class ImageViewSet(viewsets.ViewSet):
     """
