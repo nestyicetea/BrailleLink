@@ -36,10 +36,10 @@ SECRET_KEY = 'django-insecure-746bi5=*si6vr1n=nd7w9rxo_zms%x*blgu_%(&*zvk9o!4t-4
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
-
+ALLOWED_HOSTS = ['*']
 ALLOWED_HOSTS = [
     os.getenv('ALLOWED_HOST'),
-    '.vercel.app',   
+    '.onrender.com',  
     'localhost',
     '127.0.0.1'
 ]
