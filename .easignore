@@ -14,7 +14,7 @@
 
 # Ignore Python files/venvs in the root
 *.txt
-*.json
+
 *.whl
 
 # CRITICAL: Keep the frontend folder
