@@ -4,6 +4,7 @@ import argparse
 import time
 import tempfile
 from pathlib import Path
+import torch
 
 # Define the root directory (where this run_pipeline.py is located)
 ROOT_DIR = Path(__file__).resolve().parent
@@ -171,6 +172,10 @@ def run_single_image(input_path: Path, output_dir: Path):
         for step_name, command in commands:
             print(f"\nRUNNING STEP: {step_name}")
             subprocess.run(command, cwd=ROOT_DIR, check=True)
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         if not expected_image.is_file() or not expected_text.is_file():
             raise FileNotFoundError(
