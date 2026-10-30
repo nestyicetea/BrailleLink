@@ -1,4 +1,5 @@
 import subprocess
+import gc
 import sys
 import argparse
 import time
