@@ -589,7 +589,7 @@ class Algorithm1ViewSet(viewsets.ViewSet):
             )
 
         repository_root = Path(settings.BASE_DIR).parent.parent
-        preprocessing_dir = repository_root / 'preprocessing'
+        preprocessing_dir = Path(settings.BASE_DIR) / 'BrailleApp' / 'preprocessing'
         run_script = preprocessing_dir / 'run.py'
         output_dir = preprocessing_dir / 'train' / 'outputs'
 
