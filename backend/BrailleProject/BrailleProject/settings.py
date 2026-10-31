@@ -14,6 +14,17 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 import dj_database_url
+import psycopg2
+
+
+# Load environment variables from .env
+load_dotenv()
+
+# Fetch variables
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Connect to the database
+connection = psycopg2.connect(DATABASE_URL)
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -36,12 +47,11 @@ SECRET_KEY = 'django-insecure-746bi5=*si6vr1n=nd7w9rxo_zms%x*blgu_%(&*zvk9o!4t-4
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
-ALLOWED_HOSTS = ['*']
+
 ALLOWED_HOSTS = [
-    os.getenv('ALLOWED_HOST'),
-    '.onrender.com',  
-    'localhost',
-    '127.0.0.1'
+    host.strip()
+    for host in os.getenv('ALLOWED_HOSTS', '').split(',')
+    if host.strip()
 ]
 
 MEDIA_URL = '/media/'
