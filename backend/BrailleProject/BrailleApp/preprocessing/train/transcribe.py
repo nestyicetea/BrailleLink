@@ -1,5 +1,6 @@
 import os
 import glob
+import argparse
 from collections import Counter
 import numpy as np
 import cv2
@@ -49,7 +50,7 @@ PATTERN_TO_LETTER = {dots: letter for letter, dots in LETTER_DOTS.items()}
 
 GRID_MIN_PIXELS = 12            
 GRID_REL_FRAC = 0.30            
-PRINT_CORRECTIONS = True        
+PRINT_CORRECTIONS = False        
 
 ENABLE_PATTERN_FIXES = True     
 RECOVER_MIN_DOTS = 2            # INCREASED from 1 to 2 to prevent fake commas from noise
@@ -286,10 +287,18 @@ def filter_lines(raw_lines, avg_w):
             result.append(cleaned)
     return result
 
-def transcribe_braille(image_path, model):
+def transcribe_braille(image_path, model, annotated_output_path=None):
     image = cv2.imread(image_path)
     if image is None:
-        return ""
+        raise ValueError(f"Could not read image: {image_path}")
+
+    output_path = annotated_output_path or os.path.join(
+        OUTPUT_DIR, f"pred_{os.path.basename(image_path)}"
+    )
+
+    def save_annotation(annotated):
+        if not cv2.imwrite(output_path, annotated):
+            raise OSError(f"Could not save annotated image: {output_path}")
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     background = float(np.median(gray))
@@ -300,6 +309,7 @@ def transcribe_braille(image_path, model):
     )[0]
 
     if prediction.boxes is None or len(prediction.boxes) == 0:
+        save_annotation(image)
         return "No Braille characters detected."
 
     boxes = []
@@ -320,6 +330,7 @@ def transcribe_braille(image_path, model):
         })
 
     if not boxes:
+        save_annotation(image)
         return "No valid Braille cells found."
 
     # --- FIX: Enforce has_dot_content for punctuation ---
@@ -351,6 +362,7 @@ def transcribe_braille(image_path, model):
     lines = filter_lines(raw_lines, avg_w)
 
     if not lines:
+        save_annotation(image)
         return "No valid Braille lines found after filtering."
 
     annotated = image.copy()
@@ -362,8 +374,7 @@ def transcribe_braille(image_path, model):
             cv2.putText(annotated, box["label"], (x1, max(y1 - 5, 15)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
 
-    output_path = os.path.join(OUTPUT_DIR, f"pred_{os.path.basename(image_path)}")
-    cv2.imwrite(output_path, annotated)
+    save_annotation(annotated)
 
     number_map = {"a": "1", "b": "2", "c": "3", "d": "4", "e": "5", "f": "6", "g": "7", "h": "8", "i": "9", "j": "0"}
     punctuation_map = {"period": ".", "comma": ",", "excla": "!"}
@@ -410,28 +421,39 @@ def transcribe_braille(image_path, model):
     return "\n".join(output_lines)
 
 if __name__ == "__main__":
-    print(f"Loading model: {MODEL_PATH}")
-    if not os.path.isfile(MODEL_PATH):
-        raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input-dir", default=TEST_IMG_DIR)
+    parser.add_argument("--output-dir", default=OUTPUT_DIR)
+    parser.add_argument("--text-output-dir", default=None)
+    parser.add_argument("--model", default=MODEL_PATH)
+    args = parser.parse_args()
 
-    model = YOLO(MODEL_PATH)
+    print(f"Loading model: {args.model}")
+    if not os.path.isfile(args.model):
+        raise FileNotFoundError(f"Model file not found: {args.model}")
+
+    os.makedirs(args.output_dir, exist_ok=True)
+    text_output_dir = args.text_output_dir or args.output_dir
+    os.makedirs(text_output_dir, exist_ok=True)
+    model = YOLO(args.model)
     extensions = ("*.jpg", "*.jpeg", "*.png", "*.bmp")
     image_paths = []
     for extension in extensions:
-        image_paths.extend(glob.glob(os.path.join(TEST_IMG_DIR, extension)))
+        image_paths.extend(glob.glob(os.path.join(args.input_dir, extension)))
     image_paths = sorted(image_paths)
 
     if not image_paths:
-        print(f"No test images in {TEST_IMG_DIR}.")
+        raise FileNotFoundError(f"No test images in {args.input_dir}.")
 
     for image_path in image_paths:
         print("=" * 30)
         print(f"IMAGE: {os.path.basename(image_path)}")
-        translation = transcribe_braille(image_path, model)
+        base_name = f"pred_{os.path.splitext(os.path.basename(image_path))[0]}"
+        image_file_path = os.path.join(args.output_dir, f"{base_name}.png")
+        translation = transcribe_braille(image_path, model, image_file_path)
         print(f"TRANSLATION:\n{translation}")
 
-        base_name = f"pred_{os.path.splitext(os.path.basename(image_path))[0]}"
-        text_file_path = os.path.join(TEXT_OUTPUT_DIR, f"{base_name}.txt")
+        text_file_path = os.path.join(text_output_dir, f"{base_name}.txt")
         with open(text_file_path, "w", encoding="utf-8") as f:
             f.write(translation)
         print(f"Saved text to: {text_file_path}")
