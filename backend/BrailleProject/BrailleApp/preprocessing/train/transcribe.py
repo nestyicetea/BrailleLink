@@ -1,6 +1,6 @@
 import os
 import glob
-import argparse
+from collections import Counter
 import numpy as np
 import cv2
 from ultralytics import YOLO
@@ -25,8 +25,40 @@ SAME_CLASS_OVERLAP_THRESHOLD = 0.85
 PUNCTUATION_LABELS = {"comma", "period", "excla"}
 
 PUNCT_CONF_THRESHOLD = CONF_THRESHOLD 
-PUNCT_MIN_DOT_PIXELS = 15
-DOT_DIFF = 35
+PUNCT_MIN_DOT_PIXELS = 15       # Increased to ensure empty boxes fail
+DOT_DIFF = 35                   # Increased to ignore faint smudges
+
+CENTER_DUP_X_FRAC = 0.8         
+CENTER_DUP_Y_FRAC = 0.5         
+OVERLAP_DUP_FRAC = 0.15         
+
+LETTER_DOTS = {
+    "a": (1,), "b": (1, 2), "c": (1, 4), "d": (1, 4, 5), "e": (1, 5),
+    "f": (1, 2, 4), "g": (1, 2, 4, 5), "h": (1, 2, 5), "i": (2, 4), "j": (2, 4, 5),
+    "k": (1, 3), "l": (1, 2, 3), "m": (1, 3, 4), "n": (1, 3, 4, 5), "o": (1, 3, 5),
+    "p": (1, 2, 3, 4), "q": (1, 2, 3, 4, 5), "r": (1, 2, 3, 5), "s": (2, 3, 4),
+    "t": (2, 3, 4, 5), "u": (1, 3, 6), "v": (1, 2, 3, 6), "w": (2, 4, 5, 6),
+    "x": (1, 3, 4, 6), "y": (1, 3, 4, 5, 6), "z": (1, 3, 5, 6),
+}
+SIGN_DOTS = {
+    "CAP": (6,), "#": (3, 4, 5, 6),
+    "comma": (2,), "period": (2, 5, 6), "excla": (2, 3, 5),
+}
+EXPECTED_DOTS = {**LETTER_DOTS, **SIGN_DOTS}
+PATTERN_TO_LETTER = {dots: letter for letter, dots in LETTER_DOTS.items()}
+
+GRID_MIN_PIXELS = 12            
+GRID_REL_FRAC = 0.30            
+PRINT_CORRECTIONS = True        
+
+ENABLE_PATTERN_FIXES = True     
+RECOVER_MIN_DOTS = 2            # INCREASED from 1 to 2 to prevent fake commas from noise
+
+STATS = {
+    "relabeled": Counter(),     
+    "kept_disagree": Counter(), 
+    "recovered": Counter(),     
+}
 
 def box_iou(a, b):
     x1 = max(a["xmin"], b["xmin"])
@@ -82,6 +114,141 @@ def has_dot_content(gray, box, background):
     dot_pixels = np.count_nonzero(np.abs(crop - background) > DOT_DIFF)
     return dot_pixels >= PUNCT_MIN_DOT_PIXELS
 
+def dot_center_offset(gray, box, background):
+    h, w = gray.shape
+    x1, y1 = max(0, int(box["xmin"])), max(0, int(box["ymin"]))
+    x2, y2 = min(w, int(box["xmax"])), min(h, int(box["ymax"]))
+    if x2 <= x1 or y2 <= y1:
+        return 99.0
+    crop = gray[y1:y2, x1:x2].astype(np.float32)
+    ys, xs = np.nonzero(np.abs(crop - background) > DOT_DIFF)
+    if len(xs) == 0:
+        return 99.0
+    cx = xs.mean() + x1
+    cy = ys.mean() + y1
+    return float(np.hypot(cx - box["x_center"], cy - box["y_center"]) / max(1.0, box["width"]))
+
+def suppress_close_centers(boxes, avg_w, avg_h, gray, background):
+    def rank(b):
+        if b["label"] in PUNCTUATION_LABELS:
+            return (1, dot_center_offset(gray, b, background), -b["conf"])
+        return (0, -b["conf"])
+
+    kept = []
+    for box in sorted(boxes, key=rank):
+        duplicate = False
+        for k in kept:
+            if abs(box["y_center"] - k["y_center"]) >= avg_h * CENTER_DUP_Y_FRAC:
+                continue
+            x_overlap = min(box["xmax"], k["xmax"]) - max(box["xmin"], k["xmin"])
+            narrower = min(box["width"], k["width"])
+            close = abs(box["x_center"] - k["x_center"]) < avg_w * CENTER_DUP_X_FRAC
+            if x_overlap > narrower * OVERLAP_DUP_FRAC or close:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(box)
+    return sorted(kept, key=lambda b: (b["y_center"], b["x_center"]))
+
+def read_dot_pattern(gray, box, background):
+    h, w = gray.shape
+    x1, y1 = max(0, int(box["xmin"])), max(0, int(box["ymin"]))
+    x2, y2 = min(w, int(box["xmax"])), min(h, int(box["ymax"]))
+    if x2 - x1 < 4 or y2 - y1 < 6:
+        return None
+
+    crop = gray[y1:y2, x1:x2].astype(np.float32)
+    changed = np.abs(crop - background) > DOT_DIFF
+    ch, cw = changed.shape
+
+    counts = {}
+    for col in range(2):
+        for row in range(3):
+            ya, yb = int(row * ch / 3), int((row + 1) * ch / 3)
+            xa, xb = int(col * cw / 2), int((col + 1) * cw / 2)
+            counts[col * 3 + row + 1] = int(np.count_nonzero(changed[ya:yb, xa:xb]))
+
+    strongest = max(counts.values())
+    if strongest < PUNCT_MIN_DOT_PIXELS:
+        return None
+
+    need = max(GRID_MIN_PIXELS, GRID_REL_FRAC * strongest)
+    
+    detected_dots = [d for d, c in counts.items() if c >= need]
+    
+    if len(detected_dots) == 0:
+        return None
+        
+    return tuple(sorted(detected_dots))
+
+def correct_labels(boxes, gray, background):
+    for box in boxes:
+        label = box["label"]
+        expected = EXPECTED_DOTS.get(label)
+        
+        if expected is None:
+            continue
+
+        pattern = read_dot_pattern(gray, box, background)
+        if pattern is None or pattern == expected:
+            continue
+
+        letter = PATTERN_TO_LETTER.get(pattern)
+        if letter is None or letter == label:
+            continue
+
+        STATS["relabeled"][(label, letter)] += 1
+        if PRINT_CORRECTIONS:
+            print(f"  relabeled '{label}' -> '{letter}' (conf {box['conf']:.2f}, dots {pattern})")
+        box["label"] = letter
+
+    return boxes
+
+def recover_missing(line, avg_w, avg_h, gray, background):
+    if len(line) < 2:
+        return line
+
+    line = sorted(line, key=lambda b: b["x_center"])
+    diffs = sorted(line[i + 1]["x_center"] - line[i]["x_center"] for i in range(len(line) - 1))
+    pitch = float(np.median(diffs[:max(1, len(diffs) // 2)]))
+    pitch = max(pitch, avg_w)
+    y_center = float(np.median([b["y_center"] for b in line]))
+
+    result = list(line)
+
+    for i in range(len(line) - 1):
+        a, b = line[i], line[i + 1]
+        distance = b["x_center"] - a["x_center"]
+        cells = int(round(distance / pitch))
+
+        if cells < 2:
+            continue
+
+        for k in range(1, cells):
+            cx = a["x_center"] + distance * k / cells
+            candidate = {
+                "xmin": cx - avg_w / 2.0, "xmax": cx + avg_w / 2.0,
+                "ymin": y_center - avg_h / 2.0, "ymax": y_center + avg_h / 2.0,
+                "x_center": cx, "y_center": y_center,
+                "width": avg_w, "height": avg_h, "label": "", "conf": 0.0,
+            }
+
+            pattern = read_dot_pattern(gray, candidate, background)
+            if pattern is None or len(pattern) < RECOVER_MIN_DOTS:
+                continue
+
+            letter = PATTERN_TO_LETTER.get(pattern)
+            if letter is None:
+                continue
+
+            candidate["label"] = letter
+            STATS["recovered"][letter] += 1
+            if PRINT_CORRECTIONS:
+                print(f"  recovered missing '{letter}' (dots {pattern}) at x={cx:.0f}")
+            result.append(candidate)
+
+    return sorted(result, key=lambda b: b["x_center"])
+
 def group_into_lines(boxes, avg_h):
     if not boxes:
         return []
@@ -119,18 +286,10 @@ def filter_lines(raw_lines, avg_w):
             result.append(cleaned)
     return result
 
-def transcribe_braille(image_path, model, annotated_output_path=None):
+def transcribe_braille(image_path, model):
     image = cv2.imread(image_path)
     if image is None:
-        raise ValueError(f"Could not read input image: {image_path}")
-
-    output_path = annotated_output_path or os.path.join(
-        OUTPUT_DIR, f"pred_{os.path.basename(image_path)}"
-    )
-
-    def save_annotation(annotated):
-        if not cv2.imwrite(output_path, annotated):
-            raise OSError(f"Could not save annotated image: {output_path}")
+        return ""
 
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     background = float(np.median(gray))
@@ -141,7 +300,6 @@ def transcribe_braille(image_path, model, annotated_output_path=None):
     )[0]
 
     if prediction.boxes is None or len(prediction.boxes) == 0:
-        save_annotation(image)
         return "No Braille characters detected."
 
     boxes = []
@@ -162,13 +320,13 @@ def transcribe_braille(image_path, model, annotated_output_path=None):
         })
 
     if not boxes:
-        save_annotation(image)
         return "No valid Braille cells found."
 
-    # Enforce has_dot_content for punctuation
+    # --- FIX: Enforce has_dot_content for punctuation ---
     filtered = []
     for box in boxes:
         if box["label"] in PUNCTUATION_LABELS:
+            # Only keep punctuation if it passes BOTH confidence and physical dot content
             if box["conf"] < PUNCT_CONF_THRESHOLD or not has_dot_content(gray, box, background):
                 continue
         filtered.append(box)
@@ -176,15 +334,23 @@ def transcribe_braille(image_path, model, annotated_output_path=None):
 
     boxes = suppress_duplicates(boxes)
 
-    avg_w = float(np.median([b["width"] for b in boxes]))
-    avg_h = float(np.median([b["height"] for b in boxes]))
+    size_source = boxes 
+    avg_w = float(np.median([b["width"] for b in size_source]))
+    avg_h = float(np.median([b["height"] for b in size_source]))
+
+    boxes = suppress_close_centers(boxes, avg_w, avg_h, gray, background)
+
+    if ENABLE_PATTERN_FIXES:
+        boxes = correct_labels(boxes, gray, background)
 
     raw_lines = group_into_lines(boxes, avg_h)
+
+    if ENABLE_PATTERN_FIXES:
+        raw_lines = [recover_missing(line, avg_w, avg_h, gray, background) for line in raw_lines]
 
     lines = filter_lines(raw_lines, avg_w)
 
     if not lines:
-        save_annotation(image)
         return "No valid Braille lines found after filtering."
 
     annotated = image.copy()
@@ -196,7 +362,8 @@ def transcribe_braille(image_path, model, annotated_output_path=None):
             cv2.putText(annotated, box["label"], (x1, max(y1 - 5, 15)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
 
-    save_annotation(annotated)
+    output_path = os.path.join(OUTPUT_DIR, f"pred_{os.path.basename(image_path)}")
+    cv2.imwrite(output_path, annotated)
 
     number_map = {"a": "1", "b": "2", "c": "3", "d": "4", "e": "5", "f": "6", "g": "7", "h": "8", "i": "9", "j": "0"}
     punctuation_map = {"period": ".", "comma": ",", "excla": "!"}
@@ -243,39 +410,28 @@ def transcribe_braille(image_path, model, annotated_output_path=None):
     return "\n".join(output_lines)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input-dir", default=TEST_IMG_DIR)
-    parser.add_argument("--output-dir", default=OUTPUT_DIR)
-    parser.add_argument("--text-output-dir", default=None)
-    parser.add_argument("--model", default=MODEL_PATH)
-    args = parser.parse_args()
+    print(f"Loading model: {MODEL_PATH}")
+    if not os.path.isfile(MODEL_PATH):
+        raise FileNotFoundError(f"Model file not found: {MODEL_PATH}")
 
-    print(f"Loading model: {args.model}")
-    if not os.path.isfile(args.model):
-        raise FileNotFoundError(f"Model file not found: {args.model}")
-
-    os.makedirs(args.output_dir, exist_ok=True)
-    text_output_dir = args.text_output_dir or args.output_dir
-    os.makedirs(text_output_dir, exist_ok=True)
-    model = YOLO(args.model)
+    model = YOLO(MODEL_PATH)
     extensions = ("*.jpg", "*.jpeg", "*.png", "*.bmp")
     image_paths = []
     for extension in extensions:
-        image_paths.extend(glob.glob(os.path.join(args.input_dir, extension)))
+        image_paths.extend(glob.glob(os.path.join(TEST_IMG_DIR, extension)))
     image_paths = sorted(image_paths)
 
     if not image_paths:
-        raise FileNotFoundError(f"No test images in {args.input_dir}.")
+        print(f"No test images in {TEST_IMG_DIR}.")
 
     for image_path in image_paths:
         print("=" * 30)
         print(f"IMAGE: {os.path.basename(image_path)}")
-        base_name = f"pred_{os.path.splitext(os.path.basename(image_path))[0]}"
-        image_file_path = os.path.join(args.output_dir, f"{base_name}.png")
-        translation = transcribe_braille(image_path, model, image_file_path)
+        translation = transcribe_braille(image_path, model)
         print(f"TRANSLATION:\n{translation}")
 
-        text_file_path = os.path.join(text_output_dir, f"{base_name}.txt")
+        base_name = f"pred_{os.path.splitext(os.path.basename(image_path))[0]}"
+        text_file_path = os.path.join(TEXT_OUTPUT_DIR, f"{base_name}.txt")
         with open(text_file_path, "w", encoding="utf-8") as f:
             f.write(translation)
         print(f"Saved text to: {text_file_path}")
