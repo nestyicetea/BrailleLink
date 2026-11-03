@@ -477,6 +477,9 @@ class Algorithm1ViewSet(viewsets.ViewSet):
     Traditional image-processing approach for Braille enhancement (no ML).
     """
 
+    DEFAULT_TOO_FAR_MAX_PCT = 60.0
+    DEFAULT_TOO_CLOSE_MIN_PCT = 80.0
+
     @action(detail=False, methods=['POST'])
     def process(self, request):
         try:
@@ -551,33 +554,161 @@ class Algorithm1ViewSet(viewsets.ViewSet):
             # POST /algorithm1/coverage/ - live distance indicator
     @action(detail=False, methods=['POST'])
     def coverage(self, request):
-        try:
-            f = request.FILES.get('image')
-            if not f:
-                return Response({'status': 'error', 'message': 'No image provided'},
-                                status=status.HTTP_400_BAD_REQUEST)
+        """
+        Live distance measurement used by the camera screen.
 
-            arr = np.frombuffer(f.read(), np.uint8)
+        The camera app sends a user-requested photo before processing it. The
+        response reports paper coverage and whether all four paper corners are
+        visible inside the frame.
+
+        Response fields:
+            status              : 'success' | 'error'
+            coverage            : float in [0, 1]  (fraction of frame covered by paper)
+            distance_percentage : float in [0, 100]  (rounded coverage * 100)
+            distance_status     : 'too_far' | 'balanced' | 'too_close'
+            bounding_box        : {x, y, w, h} of the detected paper
+            paper_corners       : ordered top-left, top-right, bottom-right,
+                                  bottom-left points, or null if not detected
+            corners_visible     : whether all four corners are inside the frame
+            capture_ready       : whether distance is balanced and all corners show
+            image_size          : {width, height}
+            thresholds          : {too_far_max_pct, too_close_min_pct}
+
+        Bands (matching your spec):
+            0  – 59   -> too_far
+            60 – 79   -> balanced
+            80 – 100  -> too_close
+
+        Optional form fields (floats, in percent):
+            too_far_max_pct     (default 60)
+            too_close_min_pct   (default 80)
+        """
+        try:
+            uploaded_file = request.FILES.get('image')
+            if not uploaded_file:
+                return Response(
+                    {'status': 'error', 'message': 'No image provided'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            try:
+                too_far_max_pct = float(
+                    request.data.get('too_far_max_pct', self.DEFAULT_TOO_FAR_MAX_PCT)
+                )
+                too_close_min_pct = float(
+                    request.data.get('too_close_min_pct', self.DEFAULT_TOO_CLOSE_MIN_PCT)
+                )
+            except (TypeError, ValueError):
+                too_far_max_pct = self.DEFAULT_TOO_FAR_MAX_PCT
+                too_close_min_pct = self.DEFAULT_TOO_CLOSE_MIN_PCT
+            if not (0 < too_far_max_pct < too_close_min_pct <= 100):
+                too_far_max_pct = self.DEFAULT_TOO_FAR_MAX_PCT
+                too_close_min_pct = self.DEFAULT_TOO_CLOSE_MIN_PCT
+
+            arr = np.frombuffer(uploaded_file.read(), np.uint8)
             gray = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
             if gray is None:
-                return Response({'status': 'error', 'message': 'Bad image'},
-                                status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {'status': 'error', 'message': 'Bad image'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
+            # Detect the largest bright object (assumed to be the Braille paper)
             blur = cv2.GaussianBlur(gray, (5, 5), 0)
             _, th = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
 
             cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not cnts:
-                return Response({'status': 'success', 'coverage': 0.0})
+                return Response({
+                    'status': 'success',
+                    'coverage': 0.0,
+                    'distance_percentage': 0.0,
+                    'distance_status': 'too_far',
+                    'paper_corners': None,
+                    'corners_visible': False,
+                    'capture_ready': False,
+                    'message': 'No paper detected in the frame.',
+                    'thresholds': {
+                        'too_far_max_pct': too_far_max_pct,
+                        'too_close_min_pct': too_close_min_pct,
+                    },
+                })
 
             biggest = max(cnts, key=cv2.contourArea)
-            coverage = cv2.contourArea(biggest) / float(gray.shape[0] * gray.shape[1])
-            return Response({'status': 'success', 'coverage': float(coverage)})
+            total_area = float(gray.shape[0] * gray.shape[1])
+            coverage = float(cv2.contourArea(biggest) / total_area)
+            distance_pct = coverage * 100.0
+
+            if distance_pct < too_far_max_pct:
+                distance_status = 'too_far'
+            elif distance_pct >= too_close_min_pct:
+                distance_status = 'too_close'
+            else:
+                distance_status = 'balanced'
+
+            x, y, w, h = cv2.boundingRect(biggest)
+            hull = cv2.convexHull(biggest)
+            perimeter = cv2.arcLength(hull, True)
+            detected_quad = None
+            if perimeter > 0:
+                for epsilon_ratio in (0.015, 0.02, 0.03, 0.04, 0.05):
+                    approx = cv2.approxPolyDP(hull, epsilon_ratio * perimeter, True)
+                    if len(approx) == 4 and cv2.isContourConvex(approx):
+                        detected_quad = approx.reshape(4, 2).astype(np.float32)
+                        break
+
+            paper_corners = None
+            corners_visible = False
+            if detected_quad is not None:
+                sums = detected_quad.sum(axis=1)
+                differences = np.diff(detected_quad, axis=1).reshape(4)
+                ordered_corners = np.array([
+                    detected_quad[np.argmin(sums)],
+                    detected_quad[np.argmin(differences)],
+                    detected_quad[np.argmax(sums)],
+                    detected_quad[np.argmax(differences)],
+                ])
+                edge_margin_x = gray.shape[1] * 0.01
+                edge_margin_y = gray.shape[0] * 0.01
+                corners_visible = bool(
+                    np.all(ordered_corners[:, 0] >= edge_margin_x)
+                    and np.all(ordered_corners[:, 0] <= gray.shape[1] - edge_margin_x)
+                    and np.all(ordered_corners[:, 1] >= edge_margin_y)
+                    and np.all(ordered_corners[:, 1] <= gray.shape[0] - edge_margin_y)
+                )
+                paper_corners = [
+                    {'x': int(point[0]), 'y': int(point[1])}
+                    for point in ordered_corners
+                ]
+
+            return Response({
+                'status': 'success',
+                'coverage': coverage,
+                'distance_percentage': round(distance_pct, 2),
+                'distance_status': distance_status,
+                'paper_corners': paper_corners,
+                'corners_visible': corners_visible,
+                'capture_ready': distance_status == 'balanced' and corners_visible,
+                'bounding_box': {
+                    'x': int(x), 'y': int(y), 'w': int(w), 'h': int(h),
+                },
+                'image_size': {
+                    'width': int(gray.shape[1]),
+                    'height': int(gray.shape[0]),
+                },
+                'thresholds': {
+                    'too_far_max_pct': too_far_max_pct,
+                    'too_close_min_pct': too_close_min_pct,
+                },
+            })
 
         except Exception as e:
-            return Response({'status': 'error', 'message': str(e)},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            logger.exception('Coverage check failed')
+            return Response(
+                {'status': 'error', 'message': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=False, methods=['POST'])
     def preprocess(self, request):
