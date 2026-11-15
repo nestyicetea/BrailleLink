@@ -27,6 +27,7 @@ class Image(models.Model):
         blank=True
     )
     image_path = models.ImageField(upload_to='images/', max_length=500, null=True, blank=True)  # Changed to ImageField
+    processed_image_path = models.ImageField(upload_to='processed_images/', max_length=500, null=True, blank=True)
     image_name = models.CharField(max_length=255, null=True, blank=True)
     output_text = models.TextField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

@@ -895,6 +895,7 @@ class ImageViewSet(viewsets.ViewSet):
             image = Image.objects.create(
                 folder=folder,
                 image_path=uploaded_file,
+                processed_image_path=request.FILES.get('processed_image'),
                 image_name=image_name,
                 output_text=output_text
             )
