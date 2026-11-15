@@ -48,7 +48,7 @@ ALLOWED_HOSTS = [
 # Supabase Storage Settings
 AWS_ACCESS_KEY_ID = os.getenv('SUPABASE_S3_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('SUPABASE_S3_SECRET_ACCESS_KEY')
-AWS_STORAGE_BUCKET_NAME = 'media'
+AWS_STORAGE_BUCKET_NAME = 'braillemedia'
 AWS_S3_REGION_NAME = os.getenv('SUPABASE_S3_REGION_NAME') # e.g., 'ap-southeast-1'
 AWS_S3_ENDPOINT_URL = f"https://{os.getenv('SUPABASE_PROJECT_REF')}.supabase.co/storage/v1/s3"
 AWS_S3_FILE_OVERWRITE = False
@@ -58,7 +58,7 @@ AWS_QUERYSTRING_AUTH = False # Important: makes URLs public so they display
 # Tell Django to use Supabase for media files
 DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
-MEDIA_URL = f"https://{os.getenv('SUPABASE_PROJECT_REF')}.supabase.co/storage/v1/object/public/media/"
+MEDIA_URL = f"https://{os.getenv('SUPABASE_PROJECT_REF')}.supabase.co/storage/v1/object/public/braillemedia/"
 # MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 
