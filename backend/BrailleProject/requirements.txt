@@ -20,3 +20,5 @@ huggingface_hub
 torch
 torchvision
 torchaudio
+django-storages
+boto3

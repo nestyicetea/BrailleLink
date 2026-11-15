@@ -14,7 +14,7 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 import dj_database_url
-
+load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -41,11 +41,25 @@ ALLOWED_HOSTS = [
     os.getenv('ALLOWED_HOST'),
     '.onrender.com',  
     'localhost',
-    '127.0.0.1'
+    '127.0.0.1',
+    '192.168.254.105'
 ]
 
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+# Supabase Storage Settings
+AWS_ACCESS_KEY_ID = os.getenv('SUPABASE_S3_ACCESS_KEY_ID')
+AWS_SECRET_ACCESS_KEY = os.getenv('SUPABASE_S3_SECRET_ACCESS_KEY')
+AWS_STORAGE_BUCKET_NAME = 'media'
+AWS_S3_REGION_NAME = os.getenv('SUPABASE_S3_REGION_NAME') # e.g., 'ap-southeast-1'
+AWS_S3_ENDPOINT_URL = f"https://{os.getenv('SUPABASE_PROJECT_REF')}.supabase.co/storage/v1/s3"
+AWS_S3_FILE_OVERWRITE = False
+AWS_DEFAULT_ACL = None
+AWS_QUERYSTRING_AUTH = False # Important: makes URLs public so they display
+
+# Tell Django to use Supabase for media files
+DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+
+MEDIA_URL = f"https://{os.getenv('SUPABASE_PROJECT_REF')}.supabase.co/storage/v1/object/public/media/"
+# MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 
 
@@ -61,6 +75,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'rest_framework',
     'BrailleApp',
+    'storages',
 ]
 
 MIDDLEWARE = [
@@ -128,7 +143,7 @@ WSGI_APPLICATION = 'BrailleProject.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
-load_dotenv()
+
 
 # DATABASES = {
 #     'default': {
