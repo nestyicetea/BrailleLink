@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 import subprocess
 import sys
+import requests 
 
 from rest_framework import viewsets, status
 from rest_framework.response import Response
@@ -909,15 +910,23 @@ class ImageViewSet(viewsets.ViewSet):
             distorted_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', distorted_name).strip(' .')
             if not distorted_name:
                 distorted_name = f'image_{image.image_id}'
+            
             distorted_path = distorted_dir / f'{distorted_name}{file_extension}'
             duplicate_index = 2
             while distorted_path.exists():
                 distorted_path = distorted_dir / f'{distorted_name}_{duplicate_index}{file_extension}'
                 duplicate_index += 1
-            shutil.copyfile(
-                image.image_path.path,
-                distorted_path
-            )
+            
+            # 🔥 NEW: Download from Supabase instead of using local .path
+            try:
+                response = requests.get(image.image_path.url, timeout=10)
+                response.raise_for_status()
+                with open(distorted_path, 'wb') as f:
+                    f.write(response.content)
+            except Exception as e:
+                print(f"Failed to download image to distorted folder: {e}")
+                # We don't crash the upload if the local save fails, 
+                # so the user still sees their image in the app.
 
             serializer = ImageSerializer(image)
             data = serializer.data
