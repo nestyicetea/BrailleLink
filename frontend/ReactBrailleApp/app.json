@@ -4,7 +4,7 @@
     "slug": "ReactBrailleApp",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/braille_mainlogo2.png",
     "scheme": "reactbrailleapp",
     "userInterfaceStyle": "automatic",
     "ios": {

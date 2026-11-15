@@ -358,6 +358,7 @@ export default function CameraScreen() {
     folderId: number | null,
     name?: string,
     outputText?: string,
+    processedImageUri?: string,
   ) => {
     setUploading(true);
     try {
@@ -371,6 +372,13 @@ export default function CameraScreen() {
         name: `captured_${Date.now()}.jpg`,
         type,
       } as any);
+      if (processedImageUri) {
+        formData.append("processed_image", {
+          uri: processedImageUri,
+          name: `processed_${Date.now()}.png`,
+          type: "image/png",
+        } as any);
+      }
       formData.append(
         "image_name",
         name || `Capture_${new Date().toLocaleString()}`,
@@ -819,6 +827,7 @@ export default function CameraScreen() {
             selectedFolder,
             `${imageName}_Photo_${photoIndex + 1}`,
             outputText,
+            batchProcessedImageUris[photoIndex],
           ))
         )
           savedCount += 1;
@@ -846,6 +855,7 @@ export default function CameraScreen() {
             selectedFolder,
             imageName,
             pendingText,
+            batchProcessedImageUris[photoIndex],
           )
         : false;
       if (photoSaved) {
@@ -1095,50 +1105,6 @@ export default function CameraScreen() {
           style={styles.permissionButton}
         >
           <Text style={styles.permissionButtonText}>Grant Permission</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  if (showReferencePage) {
-    return (
-      <View style={styles.referencePage}>
-        <View style={styles.referenceHeader}>
-          <TouchableOpacity
-            onPress={() => setShowReferencePage(false)}
-            style={styles.backButton}
-            accessibilityRole="button"
-            accessibilityLabel="Return to camera"
-          >
-            <Ionicons name="arrow-back" size={24} color="#fff" />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Photo Capture Guide</Text>
-          <View style={styles.referenceHeaderSpacer} />
-        </View>
-        <Text style={styles.referenceTitle}>For a clear Braille scan</Text>
-        <Text style={styles.referenceDescription}>
-          Review this guide before choosing your photo.
-        </Text>
-        <Image
-          source={require("../assets/images/reference.jpg")}
-          style={styles.referenceImage}
-          resizeMode="contain"
-          accessibilityLabel="Guide showing correct and incorrect ways to capture Braille paper"
-        />
-        <TouchableOpacity
-          style={[
-            styles.referenceConfirmButton,
-            referenceCountdown > 0 && styles.referenceConfirmButtonDisabled,
-          ]}
-          onPress={confirmReferenceAndPickImage}
-          disabled={referenceCountdown > 0}
-          accessibilityRole="button"
-        >
-          <Text style={styles.referenceConfirmButtonText}>
-            {referenceCountdown > 0
-              ? `I Understand (${referenceCountdown})`
-              : "I Understand"}
-          </Text>
         </TouchableOpacity>
       </View>
     );
@@ -1883,24 +1849,93 @@ export default function CameraScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      <Modal
+        visible={showReferencePage}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowReferencePage(false)}
+      >
+        <View style={styles.referenceModalOverlay}>
+          <View style={styles.referenceModalContent}>
+            {/* <View style={styles.referenceHeader}>
+              <View style={styles.referenceHeaderSpacer} />
+              <Text style={styles.headerTitle}>Photo Capture Guide</Text>
+              <TouchableOpacity
+                onPress={() => setShowReferencePage(false)}
+                style={styles.referenceCloseButton}
+                accessibilityRole="button"
+                accessibilityLabel="Close photo capture guide"
+              >
+                <Ionicons name="close" size={24} color="#fff" />
+              </TouchableOpacity>
+            </View> */}
+            <Text style={styles.referenceTitle}>For a clear Braille scan</Text>
+            <Text style={styles.referenceDescription}>
+              Review this guide before choosing your photo.
+            </Text>
+            <Image
+              source={require("../assets/images/reference.jpg")}
+              style={styles.referenceImage}
+              resizeMode="contain"
+              accessibilityLabel="Guide showing correct and incorrect ways to capture Braille paper"
+            />
+            <TouchableOpacity
+              style={[
+                styles.referenceConfirmButton,
+                referenceCountdown > 0 && styles.referenceConfirmButtonDisabled,
+              ]}
+              onPress={confirmReferenceAndPickImage}
+              disabled={referenceCountdown > 0}
+              accessibilityRole="button"
+            >
+              <Text style={styles.referenceConfirmButtonText}>
+                {referenceCountdown > 0
+                  ? `I Understand (${referenceCountdown})`
+                  : "I Understand"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#000" },
-  referencePage: { flex: 1, backgroundColor: "#fff", alignItems: "center" },
+  referenceModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+  },
+  referenceModalContent: {
+    width: "100%",
+    maxWidth: 480,
+    maxHeight: "90%",
+    borderRadius: 20,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    overflow: "hidden",
+  },
   referenceHeader: {
     width: "100%",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingTop: 50,
-    paddingBottom: 5,
-    paddingHorizontal: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
     backgroundColor: "#DC143C",
   },
   referenceHeaderSpacer: { width: 40 },
+  referenceCloseButton: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   referenceTitle: {
     marginTop: 18,
     paddingHorizontal: 20,
@@ -1916,11 +1951,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: "center",
   },
-  referenceImage: { flex: 1, width: width - 24, marginVertical: 10 },
+  referenceImage: {
+    width: "100%",
+    height: height * 0.45,
+    marginVertical: 10,
+  },
   referenceConfirmButton: {
     minHeight: 52,
-    width: width - 48,
-    marginBottom: 24,
+    width: "88%",
+    marginBottom: 18,
     borderRadius: 12,
     backgroundColor: "#DC143C",
     alignItems: "center",

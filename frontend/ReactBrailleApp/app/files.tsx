@@ -22,6 +22,7 @@ export default function FilesScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [files, setFiles] = useState<FileItem[]>([]);
+  const [selectedFolders, setSelectedFolders] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -92,23 +93,51 @@ export default function FilesScreen() {
     }
   };
 
-  const handleDeleteFolder = (folderId: number, folderName: string) => {
+  const toggleFolderSelection = (folderId: number) => {
+    setSelectedFolders(current =>
+      current.includes(folderId)
+        ? current.filter(id => id !== folderId)
+        : [...current, folderId]
+    );
+  };
+
+  const handleDeleteSelected = () => {
+    const foldersToDelete = files.filter(folder => selectedFolders.includes(folder.folder_id));
+    if (foldersToDelete.length === 0) return;
+
     Alert.alert(
-      'Delete Folder',
-      `Are you sure you want to delete "${folderName}"?`,
+      'Delete Folders',
+      `Are you sure you want to delete ${foldersToDelete.length} folder(s)?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete',
           style: 'destructive',
           onPress: async () => {
-            try {
-              await AxiosInstance.delete(`/folders/${folderId}/`);
-              setFiles(files.filter(f => f.folder_id !== folderId));
-              Alert.alert('Success', 'Folder deleted successfully');
-            } catch (error) {
-              console.error('Error deleting folder:', error);
-              Alert.alert('Error', 'Failed to delete folder');
+            const deletedFolderIds: number[] = [];
+            let failed = false;
+
+            for (const folder of foldersToDelete) {
+              try {
+                await AxiosInstance.delete(`/folders/${folder.folder_id}/`);
+                deletedFolderIds.push(folder.folder_id);
+              } catch (error) {
+                console.error(`Error deleting folder ${folder.folder_id}:`, error);
+                failed = true;
+              }
+            }
+
+            setFiles(currentFiles =>
+              currentFiles.filter(folder => !deletedFolderIds.includes(folder.folder_id))
+            );
+            setSelectedFolders(current =>
+              current.filter(folderId => !deletedFolderIds.includes(folderId))
+            );
+
+            if (failed) {
+              Alert.alert('Error', 'Some folders could not be deleted');
+            } else {
+              Alert.alert('Success', `${deletedFolderIds.length} folder(s) deleted successfully`);
             }
           }
         }
@@ -182,37 +211,62 @@ export default function FilesScreen() {
     folderLastTap.current[item.folder_id] = now;
   };
 
-  const renderItem = (item: FileItem) => (
-    <TouchableOpacity
-      key={item.folder_id}
-      style={styles.gridItem}
-      onPress={() => router.push({
-        pathname: '/view-folder',
-        params: { 
-          folderId: item.folder_id, 
-          folderName: item.folder_name 
-        }
-      })}
-      activeOpacity={0.7}
-    >
-      <View style={styles.iconContainer}>
-        <Text style={styles.icon}>📁</Text>
-        {/* Number badge at top-right - no background color */}
-        <Text style={styles.badgeText}>{item.image_count || 0}</Text>
-      </View>
-      
-      {/* Folder Name - Double tap to Rename */}
-      <TouchableOpacity onPress={() => handleFolderNameDoubleTap(item)} style={styles.nameRow}>
+  const renderItem = (item: FileItem) => {
+    const isSelected = selectedFolders.includes(item.folder_id);
+    const folderName = (
+      <>
         <Ionicons name="pencil" size={10} color="#8E8E93" style={styles.pencilIcon} />
         <Text style={styles.itemName} numberOfLines={1}>
           {item.folder_name}
         </Text>
+      </>
+    );
+
+    return (
+      <TouchableOpacity
+        key={item.folder_id}
+        style={styles.gridItem}
+        onPress={() => {
+          if (selectedFolders.length > 0) {
+            toggleFolderSelection(item.folder_id);
+            return;
+          }
+          router.push({
+            pathname: '/view-folder',
+            params: {
+              folderId: item.folder_id,
+              folderName: item.folder_name
+            }
+          });
+        }}
+        onLongPress={() => toggleFolderSelection(item.folder_id)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.iconContainer}>
+          <Text style={styles.icon}>📁</Text>
+          {/* Number badge at top-right - no background color */}
+          <Text style={styles.badgeText}>{item.image_count || 0}</Text>
+          {isSelected && (
+            <View style={styles.checkmarkOverlay}>
+              <Ionicons name="checkmark-circle" size={22} color={theme.accent} />
+            </View>
+          )}
+        </View>
+
+        {/* Folder Name - Double tap to Rename */}
+        {selectedFolders.length > 0 ? (
+          <View style={styles.nameRow}>{folderName}</View>
+        ) : (
+          <TouchableOpacity onPress={() => handleFolderNameDoubleTap(item)} style={styles.nameRow}>
+            {folderName}
+          </TouchableOpacity>
+        )}
+
+        {/* Item count text below folder name */}
+        <Text style={styles.itemCount}>{item.image_count || 0} items</Text>
       </TouchableOpacity>
-      
-      {/* Item count text below folder name */}
-      <Text style={styles.itemCount}>{item.image_count || 0} items</Text>
-    </TouchableOpacity>
-  );
+    );
+  };
 
   const renderAddFolderCard = () => (
     <TouchableOpacity
@@ -304,6 +358,30 @@ export default function FilesScreen() {
             </View>
           </TouchableOpacity>
         </View>
+
+        {selectedFolders.length > 0 && (
+          <View style={[styles.selectionActions, { backgroundColor: theme.surface, borderBottomColor: theme.border }]}>
+            <Text style={[styles.selectionCount, { color: theme.textMuted }]}>
+              {selectedFolders.length} selected
+            </Text>
+            <View style={styles.selectionButtons}>
+              <TouchableOpacity
+                onPress={() => setSelectedFolders([])}
+                style={styles.selectionActionBtn}
+                accessibilityLabel="Cancel folder selection"
+              >
+                <Text style={[styles.cancelSelectionText, { color: theme.accent }]}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleDeleteSelected}
+                style={styles.selectionActionBtn}
+                accessibilityLabel="Delete selected folders"
+              >
+                <Ionicons name="trash-outline" size={22} color={theme.accent} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         {/* Grid */}
         <View style={styles.gridContainer}>
@@ -474,6 +552,29 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 20,
   },
+  selectionActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+  },
+  selectionCount: {
+    fontSize: 14,
+  },
+  selectionButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  selectionActionBtn: {
+    padding: 4,
+  },
+  cancelSelectionText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
   gridContainer: {
     paddingHorizontal: 16,
     marginTop: 8,
@@ -509,6 +610,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#DC143C',
     backgroundColor: 'transparent',
+  },
+  checkmarkOverlay: {
+    position: 'absolute',
+    top: 4,
+    left: 4,
   },
   itemName: {
     fontSize: 13,

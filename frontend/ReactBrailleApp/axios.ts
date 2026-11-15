@@ -17,6 +17,7 @@ api.interceptors.response.use((response: any) => {
     response.data.images = response.data.images.map((img: any) => ({
       ...img,
       image_url: getImageUrl(img.image_path),
+      processed_image_url: getImageUrl(img.processed_image_path),
       is_text: img.image_path?.endsWith('.txt') || false,
     }));
   }
